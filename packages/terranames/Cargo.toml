@@ -1,0 +1,25 @@
+[package]
+name = "terranames"
+version = "0.1.0"
+authors = ["Jon Lund Steffensen <jonlst@gmail.com>"]
+edition = "2018"
+
+[features]
+# for quicker tests, cargo test --lib
+# for more explicit tests, cargo test --features=backtraces
+backtraces = ["cosmwasm-std/backtraces"]
+
+[dependencies]
+cosmwasm-std = "0.10.1"
+schemars = "0.7"
+serde = { version = "1.0.103", default-features = false, features = ["derive"] }
+terra-cosmwasm = "1.2.4"
+
+[dev-dependencies]
+cosmwasm-schema = "0.10.1"
+
+[profile.dev]
+overflow-checks = true
+
+[profile.release]
+overflow-checks = true

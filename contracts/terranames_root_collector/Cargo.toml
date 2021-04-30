@@ -1,0 +1,26 @@
+[package]
+name = "terranames-root-collector"
+version = "0.1.0"
+authors = ["Jon Lund Steffensen <jonlst@gmail.com>"]
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# for more explicit tests, cargo test --features=backtraces
+backtraces = ["cosmwasm-std/backtraces"]
+library = []
+
+[dependencies]
+cosmwasm-std = { version = "0.10.1" }
+cosmwasm-storage = { version = "0.10.1" }
+cw20 = "0.2.3"
+schemars = "0.7"
+serde = { version = "1.0.103", default-features = false, features = ["derive"] }
+snafu = { version = "0.6.3" }
+terranames = { path = "../../packages/terranames", default-features = false, version = "0.1.0"}
+terraswap = "1.2.0"
+
+[dev-dependencies]
+cosmwasm-schema = { version = "0.10.1" }
