@@ -113,10 +113,22 @@ pub struct NameStateResponse {
     pub expire_block: Option<u64>,
 }
 
-/// Return deposit needed for blocks and rate
-pub fn deposit_from_blocks(blocks: u64, rate: Uint128) -> Uint128 {
-    rate * Decimal::from_ratio(blocks, RATE_BLOCK_DENOM)
+/// Return deposit needed for blocks and rate rounded down.
+///
+/// Rounded down to nearest raw unit (e.g. to 1 uusd NOT 1 whole usd).
+pub fn deposit_from_blocks_floor(blocks: u64, rate: Uint128) -> Uint128 {
+    rate.multiply_ratio(blocks, RATE_BLOCK_DENOM)
 }
+
+/// Return deposit needed for blocks and rate rounded up.
+///
+/// Rounded up to nearest raw unit (e.g. to 1 uusd NOT 1 whole usd).
+pub fn deposit_from_blocks_ceil(blocks: u64, rate: Uint128) -> Uint128 {
+    let a = blocks as u128 * rate.u128() + RATE_BLOCK_DENOM as u128 - 1;
+    Uint128::from(1u64).multiply_ratio(a, RATE_BLOCK_DENOM)
+}
+
+// int(((blocks * rate) + (RATE_BLOCK_DENOM-1))/RATE_BLOCK_DENOM)
 
 /// Return number of blocks corresponding to deposit and rate
 pub fn blocks_from_deposit(deposit: Uint128, rate: Uint128) -> Option<u64> {

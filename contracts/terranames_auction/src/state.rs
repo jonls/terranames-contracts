@@ -6,7 +6,7 @@ use cosmwasm_storage::{
     bucket, bucket_read, singleton, singleton_read,
 };
 
-use terranames::auction::{blocks_from_deposit, deposit_from_blocks};
+use terranames::auction::{blocks_from_deposit, deposit_from_blocks_floor};
 
 pub static CONFIG_KEY: &[u8] = b"config";
 pub static NAME_STATE_PREFIX: &[u8] = b"name";
@@ -125,7 +125,7 @@ impl NameState {
             None => return Uint128::zero(),
         };
         let max_blocks_from_beginning = config.max_lease_blocks + blocks_spent;
-        deposit_from_blocks(max_blocks_from_beginning, self.rate)
+        deposit_from_blocks_floor(max_blocks_from_beginning, self.rate)
     }
 
     /// Return owner status

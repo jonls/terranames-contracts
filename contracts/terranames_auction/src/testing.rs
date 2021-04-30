@@ -605,12 +605,12 @@ fn set_lower_rate() {
 
     assert_eq!(name_state.rate, Uint128::from(98u64));
     assert_eq!(name_state.begin_block, rate_change_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(988u64));
+    assert_eq!(name_state.begin_deposit, Uint128::from(987u64));
 
     assert_eq!(name_state.counter_delay_end, rate_change_block + 86400);
     assert_eq!(name_state.transition_delay_end, rate_change_block);
     assert_eq!(name_state.bid_delay_end, rate_change_block + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(rate_change_block + 10081632));
+    assert_eq!(name_state.expire_block, Some(rate_change_block + 10071428));
 }
 
 #[test]
@@ -652,12 +652,12 @@ fn set_higher_rate() {
 
     assert_eq!(name_state.rate, Uint128::from(246u64));
     assert_eq!(name_state.begin_block, rate_change_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(988u64));
+    assert_eq!(name_state.begin_deposit, Uint128::from(987u64));
 
     assert_eq!(name_state.counter_delay_end, rate_change_block + 86400);
     assert_eq!(name_state.transition_delay_end, rate_change_block);
     assert_eq!(name_state.bid_delay_end, rate_change_block + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(rate_change_block + 4016260));
+    assert_eq!(name_state.expire_block, Some(rate_change_block + 4012195));
 }
 
 #[test]

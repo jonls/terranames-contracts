@@ -5,8 +5,8 @@ use cosmwasm_std::{
 };
 
 use terranames::auction::{
-    deposit_from_blocks, ConfigResponse, HandleMsg, InitMsg, NameStateResponse,
-    QueryMsg,
+    deposit_from_blocks_ceil, deposit_from_blocks_floor, ConfigResponse,
+    HandleMsg, InitMsg, NameStateResponse, QueryMsg,
 };
 use terranames::collector::{
     AcceptFunds, HandleMsg as CollectorHandleMsg,
@@ -196,7 +196,7 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
     }
 
     let msg_deposit = get_sent_funds(&env, &config.stable_denom);
-    let deposit_spent = deposit_from_blocks(blocks_spent_since_bid, name_state.rate);
+    let deposit_spent = deposit_from_blocks_ceil(blocks_spent_since_bid, name_state.rate);
     let deposit_left = (name_state.begin_deposit - deposit_spent)?;
 
     if msg_deposit <= deposit_left {
@@ -211,8 +211,8 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
     // edges. The lower limit probably needs to be at least
     // counter_delay_blocks to avoid an attack where a name is bid on with a
     // very short time to expiry then the rate resets after expiry.
-    let min_deposit = deposit_from_blocks(config.min_lease_blocks, rate);
-    let max_deposit = deposit_from_blocks(config.max_lease_blocks, rate);
+    let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
+    let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
         return Err(StdError::generic_err(
             "Deposit is outside of the allowed range",
@@ -288,8 +288,8 @@ fn handle_bid_new<S: Storage, A: Api, Q: Querier>(
     let msg_deposit = get_sent_funds(&env, &config.stable_denom);
     let begin_block = env.block.height;
 
-    let min_deposit = deposit_from_blocks(config.min_lease_blocks, rate);
-    let max_deposit = deposit_from_blocks(config.max_lease_blocks, rate);
+    let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
+    let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
         return Err(StdError::generic_err(
             "Deposit is outside of the allowed range",
@@ -406,17 +406,15 @@ fn handle_set_rate<S: Storage, A: Api, Q: Querier>(
         return Err(StdError::unauthorized());
     }
 
-    // TODO this may need more precision in the begin_deposit to avoid an
-    // attack where calling set_rate frequently results in a spent_deposit
-    // that is always zero. Alternative: Disallow changing this too frequently?
-    // Alternative 2: Always round up spent deposit.
-
+    // Always round up spent deposit to avoid charing too little.
     let blocks_spent = env.block.height - name_state.begin_block;
-    let spent_deposit = deposit_from_blocks(blocks_spent, name_state.rate);
-    let new_deposit = (name_state.begin_deposit - spent_deposit)?;
+    let spent_deposit = deposit_from_blocks_ceil(blocks_spent, name_state.rate);
+    let new_deposit = (
+        name_state.begin_deposit - spent_deposit
+    ).unwrap_or_else(|_| Uint128::zero()); // TODO <-- add test for this: last block spends slightly more than total deposit
 
-    let min_deposit = deposit_from_blocks(config.min_lease_blocks, rate);
-    let max_deposit = deposit_from_blocks(config.max_lease_blocks, rate);
+    let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
+    let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
 
     if new_deposit < min_deposit || new_deposit > max_deposit {
         return Err(StdError::generic_err(
