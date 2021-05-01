@@ -45,7 +45,7 @@ struct Bid<'a> {
 
 impl<'a> Bids<'a> {
     fn new(name: &'a str) -> Bids<'a> {
-        Bids {
+        Self {
             name,
         }
     }
@@ -63,14 +63,14 @@ impl<'a> Bids<'a> {
 
 impl<'a> Bid<'a> {
     fn rate(self, rate: u128) -> Bid<'a> {
-        Bid {
+        Self {
             rate,
             ..self
         }
     }
 
     fn deposit(self, deposit: u128) -> Bid<'a> {
-        Bid {
+        Self {
             deposit,
             ..self
         }
@@ -94,9 +94,155 @@ trait EnvBuilder {
 
 impl EnvBuilder for Env {
     /// Set block height for Env
-    fn at_block_height(mut self, block_height: u64) -> Env {
+    fn at_block_height(mut self, block_height: u64) -> Self {
         self.block.height = block_height;
         self
+    }
+}
+
+/// Helper trait for asserting NameStateResponse
+#[must_use]
+struct NameStateAsserter<'a> {
+    name: &'a str,
+
+    owner: Option<&'a str>,
+    controller: Option<Option<&'a str>>,
+
+    rate: Option<u128>,
+    begin_block: Option<u64>,
+    begin_deposit: Option<u128>,
+
+    previous_owner: Option<Option<&'a str>>,
+
+    counter_delay_end: Option<u64>,
+    transition_delay_end: Option<u64>,
+    bid_delay_end: Option<u64>,
+    expire_block: Option<Option<u64>>,
+}
+
+impl<'a> NameStateAsserter<'a> {
+    fn new(name: &'a str) -> Self {
+        Self {
+            name,
+            owner: None,
+            controller: None,
+            rate: None,
+            begin_block: None,
+            begin_deposit: None,
+            previous_owner: None,
+            counter_delay_end: None,
+            transition_delay_end: None,
+            bid_delay_end: None,
+            expire_block: None,
+        }
+    }
+
+    fn owner(self, owner: &'a str) -> Self {
+        Self {
+            owner: Some(owner),
+            ..self
+        }
+    }
+
+    fn controller(self, controller: Option<&'a str>) -> Self {
+        Self {
+            controller: Some(controller),
+            ..self
+        }
+    }
+
+    fn rate(self, rate: u128) -> Self {
+        Self {
+            rate: Some(rate),
+            ..self
+        }
+    }
+
+    fn begin_block(self, begin_block: u64) -> Self {
+        Self {
+            begin_block: Some(begin_block),
+            ..self
+        }
+    }
+
+    fn begin_deposit(self, begin_deposit: u128) -> Self {
+        Self {
+            begin_deposit: Some(begin_deposit),
+            ..self
+        }
+    }
+
+    fn previous_owner(self, previous_owner: Option<&'a str>) -> Self {
+        Self {
+            previous_owner: Some(previous_owner),
+            ..self
+        }
+    }
+
+    fn counter_delay_end(self, counter_delay_end: u64) -> Self {
+        Self {
+            counter_delay_end: Some(counter_delay_end),
+            ..self
+        }
+    }
+
+    fn transition_delay_end(self, transition_delay_end: u64) -> Self {
+        Self {
+            transition_delay_end: Some(transition_delay_end),
+            ..self
+        }
+    }
+
+    fn bid_delay_end(self, bid_delay_end: u64) -> Self {
+        Self {
+            bid_delay_end: Some(bid_delay_end),
+            ..self
+        }
+    }
+
+    fn expire_block(self, expire_block: Option<u64>) -> Self {
+        Self {
+            expire_block: Some(expire_block),
+            ..self
+        }
+    }
+
+    fn assert<S: Storage, A: Api, Q: Querier>(self, deps: &Extern<S, A, Q>) {
+        let res = query(deps, QueryMsg::GetNameState {
+            name: self.name.to_string(),
+        }).unwrap();
+        let name_state: NameStateResponse = from_binary(&res).unwrap();
+
+        if let Some(owner) = self.owner {
+            assert_eq!(name_state.owner.as_str(), owner, "owner does not match");
+        }
+        if let Some(controller) = self.controller {
+            assert_eq!(name_state.controller, controller.map(|c| c.into()), "controller does not match");
+        }
+        if let Some(rate) = self.rate {
+            assert_eq!(name_state.rate.u128(), rate, "rate does not match");
+        }
+        if let Some(begin_block) = self.begin_block {
+            assert_eq!(name_state.begin_block, begin_block, "begin_block does not match");
+        }
+        if let Some(begin_deposit) = self.begin_deposit {
+            assert_eq!(name_state.begin_deposit.u128(), begin_deposit, "begin_deposit does not match");
+        }
+        if let Some(previous_owner) = self.previous_owner {
+            assert_eq!(name_state.previous_owner, previous_owner.map(|c| c.into()), "previous_owner does not match");
+        }
+        if let Some(counter_delay_end) = self.counter_delay_end {
+            assert_eq!(name_state.counter_delay_end, counter_delay_end, "counter_delay_end does not match");
+        }
+        if let Some(transition_delay_end) = self.transition_delay_end {
+            assert_eq!(name_state.transition_delay_end, transition_delay_end, "transition_delay_end does not match");
+        }
+        if let Some(bid_delay_end) = self.bid_delay_end {
+            assert_eq!(name_state.bid_delay_end, bid_delay_end, "bid_delay_end does not match");
+        }
+        if let Some(expire_block) = self.expire_block {
+            assert_eq!(name_state.expire_block, expire_block, "expire_block does not match");
+        }
     }
 }
 
@@ -140,21 +286,17 @@ fn initial_zero_bid() {
         .unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner.as_str(), "bidder");
-    assert_eq!(name_state.controller, None);
-
-    assert_eq!(name_state.rate, Uint128::zero());
-    assert_eq!(name_state.begin_block, bid_block);
-    assert_eq!(name_state.begin_deposit, Uint128::zero());
-
-    assert_eq!(name_state.counter_delay_end, 1234 + 86400);
-    assert_eq!(name_state.transition_delay_end, 1234);
-    assert_eq!(name_state.bid_delay_end, 1234);
-    assert_eq!(name_state.expire_block, None);
+    NameStateAsserter::new("example")
+        .owner("bidder")
+        .controller(None)
+        .rate(0)
+        .begin_block(bid_block)
+        .begin_deposit(0)
+        .counter_delay_end(1234 + 86400)
+        .transition_delay_end(1234)
+        .bid_delay_end(1234)
+        .expire_block(None)
+        .assert(&deps);
 }
 
 #[test]
@@ -201,21 +343,17 @@ fn initial_non_zero_bid() {
         _ => panic!("Unexpected message type"),
     }
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner.as_str(), "bidder");
-    assert_eq!(name_state.controller, None);
-
-    assert_eq!(name_state.rate, Uint128::from(194_513u64));
-    assert_eq!(name_state.begin_block, bid_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(1_230_000u64));
-
-    assert_eq!(name_state.counter_delay_end, 1234 + 86400);
-    assert_eq!(name_state.transition_delay_end, 1234);
-    assert_eq!(name_state.bid_delay_end, 1234 + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(1234 + 6323484));
+    NameStateAsserter::new("example")
+        .owner("bidder")
+        .controller(None)
+        .rate(194_513)
+        .begin_block(bid_block)
+        .begin_deposit(1_230_000)
+        .counter_delay_end(1234 + 86400)
+        .transition_delay_end(1234)
+        .bid_delay_end(1234 + 86400 + 2254114)
+        .expire_block(Some(1234 + 6323484))
+        .assert(&deps);
 }
 
 #[test]
@@ -335,21 +473,17 @@ fn bid_on_existing_zero_rate_name_in_counter_delay() {
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner.as_str(), "bidder_2");
-    assert_eq!(name_state.controller, None);
-
-    assert_eq!(name_state.rate, Uint128::from(123u64));
-    assert_eq!(name_state.begin_block, bid_2_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(1_000u64));
-
-    assert_eq!(name_state.counter_delay_end, bid_2_block + 86400);
-    assert_eq!(name_state.transition_delay_end, bid_2_block + 86400 + 259200);
-    assert_eq!(name_state.bid_delay_end, bid_2_block + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(bid_2_block + 8130081));
+    NameStateAsserter::new("example")
+        .owner("bidder_2")
+        .controller(None)
+        .rate(123)
+        .begin_block(bid_2_block)
+        .begin_deposit(1_000)
+        .counter_delay_end(bid_2_block + 86400)
+        .transition_delay_end(bid_2_block + 86400 + 259200)
+        .bid_delay_end(bid_2_block + 86400 + 2254114)
+        .expire_block(Some(bid_2_block + 8130081))
+        .assert(&deps);
 }
 
 #[test]
@@ -381,21 +515,17 @@ fn bid_on_existing_zero_rate_name_after_counter_delay() {
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner.as_str(), "bidder_2");
-    assert_eq!(name_state.controller, None);
-
-    assert_eq!(name_state.rate, Uint128::from(123u64));
-    assert_eq!(name_state.begin_block, bid_2_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(1_000u64));
-
-    assert_eq!(name_state.counter_delay_end, bid_2_block + 86400);
-    assert_eq!(name_state.transition_delay_end, bid_2_block + 86400 + 259200);
-    assert_eq!(name_state.bid_delay_end, bid_2_block + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(bid_2_block + 8130081));
+    NameStateAsserter::new("example")
+        .owner("bidder_2")
+        .controller(None)
+        .rate(123)
+        .begin_block(bid_2_block)
+        .begin_deposit(1_000)
+        .counter_delay_end(bid_2_block + 86400)
+        .transition_delay_end(bid_2_block + 86400 + 259200)
+        .bid_delay_end(bid_2_block + 86400 + 2254114)
+        .expire_block(Some(bid_2_block + 8130081))
+        .assert(&deps);
 }
 
 // TODO More bidding test cases needed here
@@ -498,20 +628,16 @@ fn fund_name() {
         _ => panic!("Unexpected message type"),
     }
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner, HumanAddr::from("bidder"));
-
-    assert_eq!(name_state.rate, Uint128::from(123u64));
-    assert_eq!(name_state.begin_block, bid_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(3_000u64));
-
-    assert_eq!(name_state.counter_delay_end, bid_block + 86400);
-    assert_eq!(name_state.transition_delay_end, 1234);
-    assert_eq!(name_state.bid_delay_end, 1234 + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(1234 + 24390243));
+    NameStateAsserter::new("example")
+        .owner("bidder")
+        .rate(123)
+        .begin_block(bid_block)
+        .begin_deposit(3_000)
+        .counter_delay_end(bid_block + 86400)
+        .transition_delay_end(1234)
+        .bid_delay_end(1234 + 86400 + 2254114)
+        .expire_block(Some(1234 + 24390243))
+        .assert(&deps);
 }
 
 #[test]
@@ -662,20 +788,16 @@ fn set_lower_rate() {
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner, HumanAddr::from("bidder"));
-
-    assert_eq!(name_state.rate, Uint128::from(98u64));
-    assert_eq!(name_state.begin_block, rate_change_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(987u64));
-
-    assert_eq!(name_state.counter_delay_end, rate_change_block + 86400);
-    assert_eq!(name_state.transition_delay_end, rate_change_block);
-    assert_eq!(name_state.bid_delay_end, rate_change_block + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(rate_change_block + 10071428));
+    NameStateAsserter::new("example")
+        .owner("bidder")
+        .rate(98)
+        .begin_block(rate_change_block)
+        .begin_deposit(987)
+        .counter_delay_end(rate_change_block + 86400)
+        .transition_delay_end(rate_change_block)
+        .bid_delay_end(rate_change_block + 86400 + 2254114)
+        .expire_block(Some(rate_change_block + 10071428))
+        .assert(&deps);
 }
 
 #[test]
@@ -707,20 +829,16 @@ fn set_higher_rate() {
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner, HumanAddr::from("bidder"));
-
-    assert_eq!(name_state.rate, Uint128::from(246u64));
-    assert_eq!(name_state.begin_block, rate_change_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(987u64));
-
-    assert_eq!(name_state.counter_delay_end, rate_change_block + 86400);
-    assert_eq!(name_state.transition_delay_end, rate_change_block);
-    assert_eq!(name_state.bid_delay_end, rate_change_block + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(rate_change_block + 4012195));
+    NameStateAsserter::new("example")
+        .owner("bidder")
+        .rate(246)
+        .begin_block(rate_change_block)
+        .begin_deposit(987)
+        .counter_delay_end(rate_change_block + 86400)
+        .transition_delay_end(rate_change_block)
+        .bid_delay_end(rate_change_block + 86400 + 2254114)
+        .expire_block(Some(rate_change_block + 4012195))
+        .assert(&deps);
 }
 
 #[test]
@@ -881,19 +999,15 @@ fn transfer_owner() {
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner, HumanAddr::from("receiver"));
-
-    assert_eq!(name_state.begin_block, bid_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(deposit_amount));
-
-    assert_eq!(name_state.counter_delay_end, bid_block + 86400);
-    assert_eq!(name_state.transition_delay_end, bid_block);
-    assert_eq!(name_state.bid_delay_end, bid_block + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(bid_block + 8130081));
+    NameStateAsserter::new("example")
+        .owner("receiver")
+        .begin_block(bid_block)
+        .begin_deposit(deposit_amount)
+        .counter_delay_end(bid_block + 86400)
+        .transition_delay_end(bid_block)
+        .bid_delay_end(bid_block + 86400 + 2254114)
+        .expire_block(Some(bid_block + 8130081))
+        .assert(&deps);
 }
 
 #[test]
@@ -936,21 +1050,15 @@ fn transfer_owner_during_counter_bid() {
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner, HumanAddr::from("bidder_2"));
-
-    assert_eq!(name_state.begin_block, bid_2_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(deposit_amount));
-
-    assert_eq!(name_state.counter_delay_end, bid_2_block + 86400);
-    assert_eq!(name_state.transition_delay_end, bid_2_block + 86400 + 259200);
-    assert_eq!(name_state.bid_delay_end, bid_2_block + 86400 + 2254114);
-    assert_eq!(name_state.expire_block, Some(bid_2_block + 8064516));
-
-    assert_eq!(name_state.previous_owner, Some(HumanAddr::from("receiver_1")));
+    NameStateAsserter::new("example")
+        .owner("bidder_2")
+        .begin_block(bid_2_block)
+        .begin_deposit(deposit_amount)
+        .counter_delay_end(bid_2_block + 86400)
+        .transition_delay_end(bid_2_block + 86400 + 259200)
+        .bid_delay_end(bid_2_block + 86400 + 2254114)
+        .expire_block(Some(bid_2_block + 8064516))
+        .assert(&deps);
 
     // Highest bid owner can also transfer their ownership of the bid and
     // potential future ownership of the name.
@@ -961,16 +1069,12 @@ fn transfer_owner_during_counter_bid() {
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner, HumanAddr::from("receiver_2"));
-
-    assert_eq!(name_state.begin_block, bid_2_block);
-    assert_eq!(name_state.begin_deposit, Uint128::from(deposit_amount));
-
-    assert_eq!(name_state.previous_owner, Some(HumanAddr::from("receiver_1")));
+    NameStateAsserter::new("example")
+        .owner("receiver_2")
+        .begin_block(bid_2_block)
+        .begin_deposit(deposit_amount)
+        .previous_owner(Some("receiver_1"))
+        .assert(&deps);
 }
 
 #[test]
@@ -1041,12 +1145,10 @@ fn set_controller_new_bid() {
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner.as_str(), "bidder");
-    assert_eq!(name_state.controller, Some(HumanAddr::from("controller")));
+    NameStateAsserter::new("example")
+        .owner("bidder")
+        .controller(Some("controller"))
+        .assert(&deps);
 }
 
 #[test]
@@ -1089,12 +1191,10 @@ fn set_controller_during_counter_delay() {
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner.as_str(), "bidder_2");
-    assert_eq!(name_state.controller, Some(HumanAddr::from("controller_1")));
+    NameStateAsserter::new("example")
+        .owner("bidder_2")
+        .controller(Some("controller_1"))
+        .assert(&deps);
 
     // Highest bid owner cannot set controller before end of counter delay
     let set_controller_block = 2342750;
@@ -1114,12 +1214,10 @@ fn set_controller_during_counter_delay() {
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    let res = query(&deps, QueryMsg::GetNameState {
-        name: "example".to_string(),
-    }).unwrap();
-    let name_state: NameStateResponse = from_binary(&res).unwrap();
-    assert_eq!(name_state.owner.as_str(), "bidder_2");
-    assert_eq!(name_state.controller, Some(HumanAddr::from("controller_2")));
+    NameStateAsserter::new("example")
+        .owner("bidder_2")
+        .controller(Some("controller_2"))
+        .assert(&deps);
 }
 
 // Edge cases:
