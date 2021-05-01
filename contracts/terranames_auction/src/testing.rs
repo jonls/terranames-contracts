@@ -29,11 +29,6 @@ fn default_init() -> InitMsg {
     }
 }
 
-/// Helper struct to create multiple bids
-struct Bids<'a> {
-    name: &'a str,
-}
-
 /// Builder for creating a single bid
 struct Bid<'a> {
     name: &'a str,
@@ -43,25 +38,17 @@ struct Bid<'a> {
     deposit: u128,
 }
 
-impl<'a> Bids<'a> {
-    fn new(name: &'a str) -> Bids<'a> {
-        Self {
-            name,
-        }
-    }
-
-    fn bid(&self, bidder: &'a str, block_height: u64) -> Bid<'a> {
+impl<'a> Bid<'a> {
+    fn on(name: &'a str, bidder: &'a str, block_height: u64) -> Bid<'a> {
         Bid {
-            name: self.name,
+            name,
             bidder,
             block_height,
             rate: 0,
             deposit: 0,
         }
     }
-}
 
-impl<'a> Bid<'a> {
     fn rate(self, rate: u128) -> Bid<'a> {
         Self {
             rate,
@@ -76,7 +63,10 @@ impl<'a> Bid<'a> {
         }
     }
 
-    fn handle<S: Storage, A: Api, Q: Querier>(self, deps: &mut Extern<S, A, Q>) -> HandleResult {
+    fn handle<S: Storage, A: Api, Q: Querier>(
+        self,
+        deps: &mut Extern<S, A, Q>,
+    ) -> HandleResult {
         let mut env = mock_env(self.bidder, &coins(self.deposit, ABC_COIN));
         env.block.height = self.block_height;
 
@@ -100,7 +90,7 @@ impl EnvBuilder for Env {
     }
 }
 
-/// Helper trait for asserting NameStateResponse
+/// Helper for asserting NameStateResponse
 #[must_use]
 struct NameStateAsserter<'a> {
     name: &'a str,
@@ -121,6 +111,7 @@ struct NameStateAsserter<'a> {
 }
 
 impl<'a> NameStateAsserter<'a> {
+    /// Create NameStateAsserter for asserting state of name
     fn new(name: &'a str) -> Self {
         Self {
             name,
@@ -137,6 +128,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set owner to assert
     fn owner(self, owner: &'a str) -> Self {
         Self {
             owner: Some(owner),
@@ -144,6 +136,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set controller to assert
     fn controller(self, controller: Option<&'a str>) -> Self {
         Self {
             controller: Some(controller),
@@ -151,6 +144,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set rate to assert
     fn rate(self, rate: u128) -> Self {
         Self {
             rate: Some(rate),
@@ -158,6 +152,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set begin block to assert
     fn begin_block(self, begin_block: u64) -> Self {
         Self {
             begin_block: Some(begin_block),
@@ -165,6 +160,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set begin deposit to assert
     fn begin_deposit(self, begin_deposit: u128) -> Self {
         Self {
             begin_deposit: Some(begin_deposit),
@@ -172,6 +168,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set previous owner to assert
     fn previous_owner(self, previous_owner: Option<&'a str>) -> Self {
         Self {
             previous_owner: Some(previous_owner),
@@ -179,6 +176,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set counter delay end to assert
     fn counter_delay_end(self, counter_delay_end: u64) -> Self {
         Self {
             counter_delay_end: Some(counter_delay_end),
@@ -186,6 +184,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set transition delay end to assert
     fn transition_delay_end(self, transition_delay_end: u64) -> Self {
         Self {
             transition_delay_end: Some(transition_delay_end),
@@ -193,6 +192,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set bid delay end to assert
     fn bid_delay_end(self, bid_delay_end: u64) -> Self {
         Self {
             bid_delay_end: Some(bid_delay_end),
@@ -200,6 +200,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Set expire block to assert
     fn expire_block(self, expire_block: Option<u64>) -> Self {
         Self {
             expire_block: Some(expire_block),
@@ -207,6 +208,7 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
+    /// Assert name state properties
     fn assert<S: Storage, A: Api, Q: Querier>(self, deps: &Extern<S, A, Q>) {
         let res = query(deps, QueryMsg::GetNameState {
             name: self.name.to_string(),
@@ -280,8 +282,7 @@ fn initial_zero_bid() {
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .handle(&mut deps)
         .unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -311,8 +312,7 @@ fn initial_non_zero_bid() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_230_000;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(194_513)
         .handle(&mut deps)
@@ -370,32 +370,28 @@ fn initial_bid_outside_of_allowed_block_range() {
     let deposit_amount: u128 = 1_230_000;
 
     // High rate results in too few blocks leased
-    let res = Bids::new("example_1")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example_1", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(545_669)
         .handle(&mut deps);
     assert_eq!(res.is_err(), true);
 
     // Lower rate is successful
-    Bids::new("example_1")
-        .bid("bidder", bid_block)
+    Bid::on("example_1", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(545_668)
         .handle(&mut deps)
         .unwrap();
 
     // Low rate results in too many blocks leased
-    let res = Bids::new("example_2")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example_2", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(54566)
         .handle(&mut deps);
     assert_eq!(res.is_err(), true);
 
     // Higher rate is successful
-    Bids::new("example_2")
-        .bid("bidder", bid_block)
+    Bid::on("example_2", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(54567)
         .handle(&mut deps)
@@ -414,8 +410,7 @@ fn bid_on_existing_name_as_owner() {
 
     let bid_1_block: u64 = 1234;
     let deposit_amount = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_1_block)
+    let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -425,8 +420,7 @@ fn bid_on_existing_name_as_owner() {
     // Bid on the name as the current owner. Not allowed.
     let bid_2_block: u64 = 2000;
     let deposit_amount = 2_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_2_block)
+    let res = Bid::on("example", "bidder_1", bid_2_block)
         .deposit(deposit_amount)
         .rate(246)
         .handle(&mut deps);
@@ -435,8 +429,7 @@ fn bid_on_existing_name_as_owner() {
     // Bid on the name as the current owner after expiry. This is allowed.
     let bid_2_block: u64 = bid_1_block + 8130081;
     let deposit_amount = 2_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_2_block)
+    let res = Bid::on("example", "bidder_1", bid_2_block)
         .deposit(deposit_amount)
         .rate(246)
         .handle(&mut deps)
@@ -455,8 +448,7 @@ fn bid_on_existing_zero_rate_name_in_counter_delay() {
     assert_eq!(0, res.messages.len());
 
     let bid_1_block: u64 = 1234;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_1_block)
+    let res = Bid::on("example", "bidder_1", bid_1_block)
         .handle(&mut deps)
         .unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -465,8 +457,7 @@ fn bid_on_existing_zero_rate_name_in_counter_delay() {
     // a counter bid can be posted any time.
     let bid_2_block: u64 = 2000;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_2", bid_2_block)
+    let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -497,8 +488,7 @@ fn bid_on_existing_zero_rate_name_after_counter_delay() {
     assert_eq!(0, res.messages.len());
 
     let bid_1_block: u64 = 1234;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_1_block)
+    let res = Bid::on("example", "bidder_1", bid_1_block)
         .handle(&mut deps)
         .unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -507,8 +497,7 @@ fn bid_on_existing_zero_rate_name_after_counter_delay() {
     // a counter bid can be posted any time.
     let bid_2_block: u64 = bid_1_block + 86400;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_2", bid_2_block)
+    let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -559,8 +548,7 @@ fn fund_zero_rate_name_fails() {
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .handle(&mut deps)
         .unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -588,8 +576,7 @@ fn fund_name() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -652,8 +639,7 @@ fn fund_name_fails_due_to_other_bid() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_block)
+    let res = Bid::on("example", "bidder_1", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -663,8 +649,7 @@ fn fund_name_fails_due_to_other_bid() {
     // Bidder 2 submits a bid while funder is preparing to fund bidder 1.
     let bid_block = 1235;
     let deposit_amount: u128 = 2_000;
-    let res = Bids::new("example")
-        .bid("bidder_2", bid_block)
+    let res = Bid::on("example", "bidder_2", bid_block)
         .deposit(deposit_amount)
         .rate(246)
         .handle(&mut deps)
@@ -696,8 +681,7 @@ fn fund_name_fails_with_zero_funds() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_block)
+    let res = Bid::on("example", "bidder_1", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -729,8 +713,7 @@ fn fund_name_fails_with_too_much_funding() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_block)
+    let res = Bid::on("example", "bidder_1", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -771,8 +754,7 @@ fn set_lower_rate() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -812,8 +794,7 @@ fn set_higher_rate() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -853,8 +834,7 @@ fn set_rate_during_counter_delay_fails() {
 
     let bid_1_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_1_block)
+    let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -872,8 +852,7 @@ fn set_rate_during_counter_delay_fails() {
 
     let bid_2_block = 2500;
     let deposit_amount: u128 = 1_001;
-    let res = Bids::new("example")
-        .bid("bidder_2", bid_2_block)
+    let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
         .handle(&mut deps)
@@ -902,8 +881,7 @@ fn set_rate_as_non_owner_fails() {
 
     let bid_1_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_1_block)
+    let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -912,8 +890,7 @@ fn set_rate_as_non_owner_fails() {
 
     let bid_2_block = 2400;
     let deposit_amount: u128 = 1_001;
-    let res = Bids::new("example")
-        .bid("bidder_2", bid_2_block)
+    let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
         .handle(&mut deps)
@@ -942,8 +919,7 @@ fn set_rate_outside_of_bounds_fails() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -982,8 +958,7 @@ fn transfer_owner() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -1022,8 +997,7 @@ fn transfer_owner_during_counter_bid() {
 
     let bid_1_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_1_block)
+    let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -1033,8 +1007,7 @@ fn transfer_owner_during_counter_bid() {
     // Another bid occurs
     let bid_2_block = 2342748;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_2", bid_2_block)
+    let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
         .handle(&mut deps)
@@ -1089,8 +1062,7 @@ fn transfer_owner_fails_if_not_owner() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -1119,8 +1091,7 @@ fn set_controller_new_bid() {
 
     let bid_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder", bid_block)
+    let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -1163,8 +1134,7 @@ fn set_controller_during_counter_delay() {
 
     let bid_1_block = 1234;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_1", bid_1_block)
+    let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
         .handle(&mut deps)
@@ -1174,8 +1144,7 @@ fn set_controller_during_counter_delay() {
     // Another bid occurs
     let bid_2_block = 2342748;
     let deposit_amount: u128 = 1_000;
-    let res = Bids::new("example")
-        .bid("bidder_2", bid_2_block)
+    let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
         .handle(&mut deps)
