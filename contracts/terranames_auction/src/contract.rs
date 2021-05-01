@@ -197,7 +197,7 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
 
     let msg_deposit = get_sent_funds(&env, &config.stable_denom);
     let deposit_spent = deposit_from_blocks_ceil(blocks_spent_since_bid, name_state.rate);
-    let deposit_left = (name_state.begin_deposit - deposit_spent)?;
+    let deposit_left = (name_state.begin_deposit - deposit_spent).unwrap_or_else(|_| Uint128::zero());
 
     if msg_deposit <= deposit_left {
         return Err(StdError::generic_err(format!(
@@ -361,7 +361,8 @@ fn handle_fund<S: Storage, A: Api, Q: Querier>(
     if combined_deposit > max_deposit {
         return Err(StdError::generic_err(format!(
             "Deposit outside of allowed range, max allowed additional: {} {}",
-            (max_deposit - name_state.begin_deposit)?, config.stable_denom,
+            (max_deposit - name_state.begin_deposit).unwrap_or_else(|_| Uint128::zero()),
+            config.stable_denom,
         )));
     }
 
@@ -406,7 +407,7 @@ fn handle_set_rate<S: Storage, A: Api, Q: Querier>(
         return Err(StdError::unauthorized());
     }
 
-    // Always round up spent deposit to avoid charing too little.
+    // Always round up spent deposit to avoid charging too little.
     let blocks_spent = env.block.height - name_state.begin_block;
     let spent_deposit = deposit_from_blocks_ceil(blocks_spent, name_state.rate);
     let new_deposit = (
