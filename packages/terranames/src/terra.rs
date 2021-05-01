@@ -39,18 +39,8 @@ pub fn calculate_added_tax<S: Storage, A: Api, Q: Querier>(
     let terra_querier = TerraQuerier::new(&deps.querier);
     let tax_rate = terra_querier.query_tax_rate()?.rate;
     let tax_cap = terra_querier.query_tax_cap(denom)?.cap;
-    Ok(std::cmp::min(
-        (
-            amount -
-            amount.multiply_ratio(
-                DECIMAL_FRACTION,
-                DECIMAL_FRACTION * tax_rate + DECIMAL_FRACTION,
-            )
-        )?,
-        tax_cap,
-    ))
+    Ok(std::cmp::min(amount * tax_rate, tax_cap))
 }
-
 
 /// Return Coin after deducting tax.
 ///
