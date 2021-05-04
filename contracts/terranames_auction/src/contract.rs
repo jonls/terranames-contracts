@@ -144,13 +144,18 @@ fn handle_bid<S: Storage, A: Api, Q: Querier>(
         let config = read_config(&deps.storage)?;
         let owner_status = name_state.owner_status(&config, env.block.height);
         match owner_status {
-            OwnerStatus::Valid { owner } |
-            OwnerStatus::CounterDelay { name_owner: owner, .. } |
-            OwnerStatus::TransitionDelay { owner } => {
-                handle_bid_existing(deps, env, name, rate, config, name_state, owner)
+            OwnerStatus::Valid { owner, transition_reference_block } |
+            OwnerStatus::CounterDelay { name_owner: owner, transition_reference_block, .. } |
+            OwnerStatus::TransitionDelay { owner, transition_reference_block } => {
+                handle_bid_existing(
+                    deps, env, name, rate, config, name_state, owner,
+                    transition_reference_block,
+                )
             },
-            OwnerStatus::Expired { expire_block } => {
-                handle_bid_new(deps, env, name, rate, expire_block)
+            OwnerStatus::Expired { expire_block, .. } => {
+                handle_bid_new(
+                    deps, env, name, rate, expire_block,
+                )
             },
         }
     } else {
@@ -166,6 +171,7 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
     config: Config,
     mut name_state: NameState,
     owner: CanonicalAddr,
+    transition_reference_block: u64,
 ) -> HandleResult {
     let sender_canonical = deps.api.canonical_address(&env.message.sender)?;
     // TODO rethink how this works when the bid delay is over but there are no
@@ -222,11 +228,20 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
     let previous_bidder = name_state.owner;
 
     name_state.previous_owner = owner;
+    name_state.previous_transition_reference_block = transition_reference_block;
     name_state.owner = sender_canonical;
     name_state.rate = rate;
     name_state.begin_block = env.block.height;
     name_state.begin_deposit = msg_deposit;
-    name_state.transition_reference_block = env.block.height;
+
+    // Only update transition reference block if ownership is assigned to a new
+    // owner.
+    if name_state.owner != name_state.previous_owner {
+        name_state.transition_reference_block = env.block.height;
+    } else {
+        name_state.transition_reference_block = name_state.previous_transition_reference_block;
+    }
+
     store_name_state(&mut deps.storage, &name, &name_state)?;
 
     let mut messages = vec![];
@@ -307,6 +322,7 @@ fn handle_bid_new<S: Storage, A: Api, Q: Querier>(
         rate: rate,
 
         previous_owner: CanonicalAddr::default(),
+        previous_transition_reference_block: 0,
     };
     store_name_state(&mut deps.storage, &name, &name_state)?;
 

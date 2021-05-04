@@ -59,6 +59,8 @@ pub struct NameState {
 
     /// Previous owner
     pub previous_owner: CanonicalAddr,
+    /// Previous transition reference block
+    pub previous_transition_reference_block: u64,
 }
 
 impl NameState {
@@ -132,31 +134,43 @@ impl NameState {
     pub fn owner_status(&self, config: &Config, block_height: u64) -> OwnerStatus {
         let blocks_spent_since_bid = match self.blocks_spent_since_bid(block_height) {
             Some(blocks_spent) => blocks_spent,
-            None => return OwnerStatus::Expired { expire_block: 0 },
+            None => return OwnerStatus::Expired {
+                expire_block: 0,
+                transition_reference_block: self.transition_reference_block,
+            },
         };
 
         if let Some(max_blocks) = self.max_blocks() {
             if blocks_spent_since_bid >= max_blocks {
-                return OwnerStatus::Expired { expire_block: self.begin_block + max_blocks };
+                return OwnerStatus::Expired {
+                    expire_block: self.begin_block + max_blocks,
+                    transition_reference_block: self.transition_reference_block,
+                };
             }
         }
 
         let blocks_spent_since_transition = match self.blocks_spent_since_transition(block_height) {
             Some(blocks_spent) => blocks_spent,
-            None => return OwnerStatus::Expired { expire_block: 0 },
+            None => return OwnerStatus::Expired {
+                expire_block: 0,
+                transition_reference_block: self.transition_reference_block,
+            },
         };
         if blocks_spent_since_bid < config.counter_delay_blocks {
             OwnerStatus::CounterDelay {
                 name_owner: self.previous_owner.clone(),
                 bid_owner: self.owner.clone(),
+                transition_reference_block: self.previous_transition_reference_block,
             }
         } else if blocks_spent_since_transition < config.counter_delay_blocks + config.transition_delay_blocks {
             OwnerStatus::TransitionDelay {
                 owner: self.owner.clone(),
+                transition_reference_block: self.transition_reference_block,
             }
         } else {
             OwnerStatus::Valid {
                 owner: self.owner.clone(),
+                transition_reference_block: self.transition_reference_block,
             }
         }
     }
@@ -164,26 +178,39 @@ impl NameState {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum OwnerStatus {
-    CounterDelay { name_owner: CanonicalAddr, bid_owner: CanonicalAddr },
-    TransitionDelay { owner: CanonicalAddr },
-    Valid { owner: CanonicalAddr },
-    Expired { expire_block: u64 },
+    CounterDelay {
+        name_owner: CanonicalAddr,
+        bid_owner: CanonicalAddr,
+        transition_reference_block: u64,
+    },
+    TransitionDelay {
+        owner: CanonicalAddr,
+        transition_reference_block: u64,
+    },
+    Valid {
+        owner: CanonicalAddr,
+        transition_reference_block: u64,
+    },
+    Expired {
+        expire_block: u64,
+        transition_reference_block: u64,
+    },
 }
 
 impl OwnerStatus {
     pub fn can_set_rate(&self, sender: &CanonicalAddr) -> bool {
         match self {
-            OwnerStatus::Valid { owner } |
-            OwnerStatus::TransitionDelay { owner } => sender == owner,
+            OwnerStatus::Valid { owner, .. } |
+            OwnerStatus::TransitionDelay { owner, .. } => sender == owner,
             _ => false,
         }
     }
 
     pub fn can_transfer_name_owner(&self, sender: &CanonicalAddr) -> bool {
         match self {
-            OwnerStatus::Valid { owner } |
+            OwnerStatus::Valid { owner, .. } |
             OwnerStatus::CounterDelay { name_owner: owner, .. } |
-            OwnerStatus::TransitionDelay { owner } => sender == owner,
+            OwnerStatus::TransitionDelay { owner, .. } => sender == owner,
             _ => false,
         }
     }
@@ -197,9 +224,9 @@ impl OwnerStatus {
 
     pub fn can_set_controller(&self, sender: &CanonicalAddr) -> bool {
         match self {
-            OwnerStatus::Valid { owner } |
+            OwnerStatus::Valid { owner, .. } |
             OwnerStatus::CounterDelay { name_owner: owner, .. } |
-            OwnerStatus::TransitionDelay { owner } => sender == owner,
+            OwnerStatus::TransitionDelay { owner, .. } => sender == owner,
             _ => false,
         }
     }

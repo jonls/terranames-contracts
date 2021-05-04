@@ -517,6 +517,123 @@ fn bid_on_existing_zero_rate_name_after_counter_delay() {
         .assert(&deps);
 }
 
+#[test]
+fn bid_three_bidders() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    // Initial bid
+    let bid_1_block = 1234;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_1_block)
+        .deposit(deposit_amount)
+        .rate(123)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // First counter following the bid delay
+    let bid_2_block = bid_1_block + 86400 + 2254114;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_2", bid_2_block)
+        .deposit(deposit_amount)
+        .rate(124)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    // Countered by third bidder
+    let bid_3_block = bid_2_block + 100;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_3", bid_3_block)
+        .deposit(deposit_amount)
+        .rate(125)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    NameStateAsserter::new("example")
+        .owner("bidder_3")
+        .previous_owner(Some("bidder_1"))
+        .rate(125)
+        .begin_block(bid_3_block)
+        .begin_deposit(1_000)
+        .counter_delay_end(bid_3_block + 86400)
+        .transition_delay_end(bid_3_block + 86400 + 259200)
+        .bid_delay_end(bid_3_block + 86400 + 2254114)
+        .expire_block(Some(bid_3_block + 8000000))
+        .assert(&deps);
+}
+
+// - Bid by A, starts ownership. Then bid by B, then by C, then counter bid by
+//   A. A should continue as owner and this should not trigger a transition.
+#[test]
+fn bid_is_counter_bid_then_countered() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    // Initial bid
+    let bid_1_block = 1234;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_1_block)
+        .deposit(deposit_amount)
+        .rate(123)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // First counter following the bid delay
+    let bid_2_block = bid_1_block + 86400 + 2254114;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_2", bid_2_block)
+        .deposit(deposit_amount)
+        .rate(124)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    // Second counter
+    let bid_3_block = bid_2_block + 100;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_3", bid_3_block)
+        .deposit(deposit_amount)
+        .rate(125)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    // Countered by initial owner
+    let bid_4_block = bid_3_block + 100;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_4_block)
+        .deposit(deposit_amount)
+        .rate(200)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    NameStateAsserter::new("example")
+        .owner("bidder_1")
+        .rate(200)
+        .begin_block(bid_4_block)
+        .begin_deposit(1_000)
+        .counter_delay_end(bid_4_block + 86400)
+        .transition_delay_end(bid_4_block)
+        .bid_delay_end(bid_4_block + 86400 + 2254114)
+        .expire_block(Some(bid_4_block + 5000000))
+        .assert(&deps);
+}
+
 // TODO More bidding test cases needed here
 
 #[test]
@@ -1190,8 +1307,6 @@ fn set_controller_during_counter_delay() {
 }
 
 // Edge cases:
-// - Bid by A, starts ownership. Then bid by B, then counter bid by A. A should
-//   continue as owner and this should not trigger a transition.
 // - Rate change by A. This should trigger a counter delay of allowed bidding
 //   but not a transition unless a counter bid wins.
 // - Name expires during transition. A new bid should not cancel the transition
