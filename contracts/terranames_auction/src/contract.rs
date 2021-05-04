@@ -442,6 +442,8 @@ fn handle_set_rate<S: Storage, A: Api, Q: Querier>(
     name_state.rate = rate;
     name_state.begin_block = env.block.height;
     name_state.begin_deposit = new_deposit;
+    name_state.previous_owner = name_state.owner.clone();
+    name_state.previous_transition_reference_block = name_state.transition_reference_block;
     store_name_state(&mut deps.storage, &name, &name_state)?;
 
     Ok(HandleResponse {

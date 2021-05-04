@@ -570,8 +570,8 @@ fn bid_three_bidders() {
         .assert(&deps);
 }
 
-// - Bid by A, starts ownership. Then bid by B, then by C, then counter bid by
-//   A. A should continue as owner and this should not trigger a transition.
+// Bid by A, starts ownership. Then bid by B, then by C, then counter bid by
+// A. A should continue as owner and this should not trigger a transition.
 #[test]
 fn bid_is_counter_bid_then_countered() {
     let mut deps = mock_dependencies(20, &[]);
@@ -726,7 +726,6 @@ fn fund_name() {
                     assert_eq!(denom, ABC_COIN);
                     assert_eq!(source_addr.as_str(), "funder");
                 },
-                _ => panic!("Unexpected message"),
             }
         },
         _ => panic!("Unexpected message type"),
@@ -889,6 +888,7 @@ fn set_lower_rate() {
 
     NameStateAsserter::new("example")
         .owner("bidder")
+        .previous_owner(Some("bidder"))
         .rate(98)
         .begin_block(rate_change_block)
         .begin_deposit(987)
@@ -929,6 +929,7 @@ fn set_higher_rate() {
 
     NameStateAsserter::new("example")
         .owner("bidder")
+        .previous_owner(Some("bidder"))
         .rate(246)
         .begin_block(rate_change_block)
         .begin_deposit(987)
@@ -1061,6 +1062,203 @@ fn set_rate_outside_of_bounds_fails() {
         rate: Uint128::from(500u64),
     });
     assert_eq!(res.is_err(), true);
+}
+
+// Rate change by A. This should trigger a counter delay of allowed bidding
+// and a transition when a counter bid wins.
+#[test]
+fn set_rate_allows_bidding_do_transition() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    let bid_1_block = 1234;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_1_block)
+        .deposit(deposit_amount)
+        .rate(123)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Owner submits requests to decrease the charged rate
+    let rate_change_block = 100_000;
+    let env = mock_env("bidder_1", &[]).at_block_height(rate_change_block);
+    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+        name: "example".to_string(),
+        rate: Uint128::from(120u64),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    let bid_2_block = rate_change_block + 100;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_2", bid_2_block)
+        .deposit(deposit_amount)
+        .rate(121)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    NameStateAsserter::new("example")
+        .owner("bidder_2")
+        .previous_owner(Some("bidder_1"))
+        .rate(121)
+        .begin_block(bid_2_block)
+        .begin_deposit(1000)
+        .counter_delay_end(bid_2_block + 86400)
+        .transition_delay_end(bid_2_block + 86400 + 259200)
+        .bid_delay_end(bid_2_block + 86400 + 2254114)
+        .expire_block(Some(bid_2_block + 8264462))
+        .assert(&deps);
+}
+
+// Rate change by A. This should trigger a counter delay of allowed bidding
+// and no transition when the counter bid does not win.
+#[test]
+fn set_rate_allows_bidding_no_transition() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    let bid_1_block = 1234;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_1_block)
+        .deposit(deposit_amount)
+        .rate(123)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Owner submits requests to decrease the charged rate
+    let rate_change_block = 100_000;
+    let env = mock_env("bidder_1", &[]).at_block_height(rate_change_block);
+    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+        name: "example".to_string(),
+        rate: Uint128::from(120u64),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Counter bid by other bidder
+    let bid_2_block = rate_change_block + 100;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_2", bid_2_block)
+        .deposit(deposit_amount)
+        .rate(121)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    // Countered by original owner
+    let bid_3_block = bid_2_block + 1000;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_3_block)
+        .deposit(deposit_amount)
+        .rate(122)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    NameStateAsserter::new("example")
+        .owner("bidder_1")
+        .previous_owner(Some("bidder_1"))
+        .rate(122)
+        .begin_block(bid_3_block)
+        .begin_deposit(1000)
+        .counter_delay_end(bid_3_block + 86400)
+        .transition_delay_end(bid_3_block) // TODO is this right?
+        .bid_delay_end(bid_3_block + 86400 + 2254114)
+        .expire_block(Some(bid_3_block + 8196721))
+        .assert(&deps);
+}
+
+// Rate change by A. This should trigger a counter delay of allowed bidding
+// and a continuation of the existing transition when the counter does not win.
+#[test]
+fn set_rate_allows_bidding_continued_transition() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    let bid_1_block = 1234;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_1_block)
+        .deposit(deposit_amount)
+        .rate(123)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Owner submits requests to decrease the charged rate
+    let rate_change_1_block = 100_000;
+    let env = mock_env("bidder_1", &[]).at_block_height(rate_change_1_block);
+    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+        name: "example".to_string(),
+        rate: Uint128::from(120u64),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Counter bid by other bidder
+    let bid_2_block = rate_change_1_block + 100;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_2", bid_2_block)
+        .deposit(deposit_amount)
+        .rate(121)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    // New owner requests change to decrease the charged rate during transition
+    let rate_change_2_block = bid_2_block + 100_000;
+    let env = mock_env("bidder_2", &[]).at_block_height(rate_change_2_block);
+    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+        name: "example".to_string(),
+        rate: Uint128::from(120u64),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Counter bid by third bidder
+    let bid_3_block = rate_change_2_block + 100;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_3", bid_3_block)
+        .deposit(deposit_amount)
+        .rate(121)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    // Countered by second owner
+    let bid_4_block = bid_3_block + 1000;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_2", bid_4_block)
+        .deposit(deposit_amount)
+        .rate(122)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    NameStateAsserter::new("example")
+        .owner("bidder_2")
+        .previous_owner(Some("bidder_2"))
+        .rate(122)
+        .begin_block(bid_4_block)
+        .begin_deposit(1000)
+        .counter_delay_end(bid_4_block + 86400)
+        .transition_delay_end(bid_2_block + 86400 + 259200)
+        .bid_delay_end(bid_4_block + 86400 + 2254114)
+        .expire_block(Some(bid_4_block + 8196721))
+        .assert(&deps);
 }
 
 #[test]
@@ -1307,8 +1505,6 @@ fn set_controller_during_counter_delay() {
 }
 
 // Edge cases:
-// - Rate change by A. This should trigger a counter delay of allowed bidding
-//   but not a transition unless a counter bid wins.
 // - Name expires during transition. A new bid should not cancel the transition
 //   period.
 // - Funding an expired name should fail maybe? There may be some cases where
