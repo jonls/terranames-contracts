@@ -634,6 +634,51 @@ fn bid_is_counter_bid_then_countered() {
         .assert(&deps);
 }
 
+// Bid on expired name.
+#[test]
+fn bid_on_expired_name() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    // Initial bid
+    let bid_1_block = 1234;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_1_block)
+        .deposit(deposit_amount)
+        .rate(123)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Bid after expiration
+    let bid_2_block = bid_1_block + 8130081 + 100;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_2", bid_2_block)
+        .deposit(deposit_amount)
+        .rate(110)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Transition delay should be based on when the name expired.
+    NameStateAsserter::new("example")
+        .owner("bidder_2")
+        .previous_owner(None)
+        .rate(110)
+        .begin_block(bid_2_block)
+        .begin_deposit(1_000)
+        .counter_delay_end(bid_2_block + 86400)
+        .transition_delay_end(bid_1_block + 8130081 + 86400 + 259200)
+        .bid_delay_end(bid_2_block + 86400 + 2254114)
+        .expire_block(Some(bid_2_block + 9090909))
+        .assert(&deps);
+}
+
 // TODO More bidding test cases needed here
 
 #[test]
