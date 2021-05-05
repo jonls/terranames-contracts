@@ -1071,7 +1071,7 @@ fn set_rate_as_non_owner_fails() {
 }
 
 #[test]
-fn set_rate_outside_of_bounds_fails() {
+fn set_rate_outside_of_lower_bound_fails() {
     let mut deps = mock_dependencies(20, &[]);
 
     let msg = default_init();
@@ -1089,24 +1089,59 @@ fn set_rate_outside_of_bounds_fails() {
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
-    // TODO make bounds checks strict and check that one-off from error is success
-    // Owner submits requests to decrease the charged rate
-    let rate_change_block = 100_000;
-    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
-        rate: Uint128::from(40u64),
-    });
-    assert_eq!(res.is_err(), true);
-
     // Owner submits requests to increase the charged rate
     let rate_change_block = 100_000;
     let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
     let res = handle(&mut deps, env, HandleMsg::SetNameRate {
         name: "example".to_string(),
-        rate: Uint128::from(500u64),
+        rate: Uint128::from(438u64),
     });
     assert_eq!(res.is_err(), true);
+
+    // Success with lower rate
+    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
+    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+        name: "example".to_string(),
+        rate: Uint128::from(437u64),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+}
+
+#[test]
+fn set_rate_outside_of_upper_bound_fails() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    let bid_block = 1234;
+    let deposit_amount: u128 = 1_000;
+    let res = Bid::on("example", "bidder", bid_block)
+        .deposit(deposit_amount)
+        .rate(123)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Owner submits requests to decrease the charged rate
+    let rate_change_block = 100_000;
+    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
+    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+        name: "example".to_string(),
+        rate: Uint128::from(43u64),
+    });
+    assert_eq!(res.is_err(), true);
+
+    // Success with higher rate
+    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
+    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+        name: "example".to_string(),
+        rate: Uint128::from(44u64),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
 }
 
 // Rate change by A. This should trigger a counter delay of allowed bidding
@@ -1218,7 +1253,7 @@ fn set_rate_allows_bidding_no_transition() {
         .begin_block(bid_3_block)
         .begin_deposit(1000)
         .counter_delay_end(bid_3_block + 86400)
-        .transition_delay_end(bid_3_block) // TODO is this right?
+        .transition_delay_end(bid_3_block)
         .bid_delay_end(bid_3_block + 86400 + 2254114)
         .expire_block(Some(bid_3_block + 8196721))
         .assert(&deps);
