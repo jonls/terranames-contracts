@@ -66,7 +66,6 @@ fn send_to_collector_msg<S: Storage, A: Api, Q: Querier>(
             contract_addr: deps.api.human_address(&config.collector_addr)?,
             msg: to_binary(
                 &CollectorHandleMsg::AcceptFunds(AcceptFunds {
-                    denom: config.stable_denom.clone(),
                     source_addr: source_addr.clone(),
                 }),
             )?,

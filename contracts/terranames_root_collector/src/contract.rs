@@ -1,16 +1,17 @@
 use cosmwasm_std::{
-    log, to_binary, Api, Binary, Coin, CosmosMsg, Env, Extern, HandleResponse,
-    HandleResult, HumanAddr, InitResponse, InitResult, Querier, QueryRequest,
-    StdError, StdResult, Storage, Uint128, WasmMsg, WasmQuery,
+    from_binary, log, to_binary, Api, Binary, Coin, CosmosMsg, Decimal, Env,
+    Extern, HandleResponse, HandleResult, HumanAddr, InitResponse, InitResult,
+    Querier, QueryRequest, StdError, StdResult, Storage, Uint128, WasmMsg,
+    WasmQuery,
 };
 
-use cw20::{Cw20Contract, Cw20HandleMsg};
-use terranames::collector::{
-    AcceptFunds,
-    RootCollectorHandleMsg as HandleMsg, RootCollectorConfigResponse as ConfigResponse,
-    RootCollectorInitMsg as InitMsg, RootCollectorQueryMsg as QueryMsg,
+use cw20::{Cw20Contract, Cw20HandleMsg, Cw20ReceiveMsg};
+use terranames::collector::AcceptFunds;
+use terranames::root_collector::{
+    ConfigResponse, HandleMsg, InitMsg, ReceiveMsg, StateResponse, QueryMsg,
 };
 use terranames::terra::{calculate_added_tax, calculate_tax, deduct_tax};
+use terranames::utils::FractionDenom;
 use terraswap::asset::{Asset, AssetInfo};
 use terraswap::pair::{
     HandleMsg as PairHandleMsg, QueryMsg as PairQueryMsg,
@@ -19,7 +20,7 @@ use terraswap::pair::{
 use terraswap::querier::query_pair_info;
 
 use crate::state::{
-    read_config, store_config, Config,
+    read_config, read_state, store_config, store_state, Config, State,
 };
 
 /// Return the funds of type denom attached in the request.
@@ -42,11 +43,11 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     }
 
     let terranames_token = deps.api.canonical_address(&msg.terranames_token)?;
-    let terraswap_registry = deps.api.canonical_address(&msg.terraswap_registry)?;
+    let terraswap_factory = deps.api.canonical_address(&msg.terraswap_factory)?;
 
     // Query for the swap contract
     let pair = query_pair_info(
-        deps, &deps.api.human_address(&terraswap_registry)?, &[
+        deps, &deps.api.human_address(&terraswap_factory)?, &[
             AssetInfo::Token {
                 contract_addr: deps.api.human_address(&terranames_token)?,
             },
@@ -56,15 +57,20 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
         ]
     )?;
 
-    let state = Config {
+    let config = Config {
         terranames_token: deps.api.canonical_address(&msg.terranames_token)?,
         terraswap_pair: deps.api.canonical_address(&pair.contract_addr)?,
         stable_denom: msg.stable_denom,
         init_token_price: msg.init_token_price,
-        initial_tokens_left: msg.initial_tokens_left,
     };
 
-    store_config(&mut deps.storage, &state)?;
+    store_config(&mut deps.storage, &config)?;
+
+    let state = State {
+        initial_token_pool: Uint128::zero(),
+    };
+
+    store_state(&mut deps.storage, &state)?;
 
     Ok(InitResponse::default())
 }
@@ -75,11 +81,14 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     msg: HandleMsg,
 ) -> HandleResult {
     match msg {
-        HandleMsg::AcceptFunds(AcceptFunds { denom, source_addr }) => {
-            handle_accept_funds(deps, env, denom, source_addr)
+        HandleMsg::AcceptFunds(AcceptFunds { source_addr }) => {
+            handle_accept_funds(deps, env, source_addr)
         },
         HandleMsg::BurnExcess {} => {
             handle_burn_excess(deps, env)
+        },
+        HandleMsg::Receive(msg) => {
+            handle_receive(deps, env, msg)
         },
     }
 }
@@ -87,30 +96,31 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
 fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    denom: String,
     source_addr: HumanAddr,
 ) -> HandleResult {
-    let mut config = read_config(&deps.storage)?;
+    let config = read_config(&deps.storage)?;
+    let mut state = read_state(&deps.storage)?;
 
-    if denom != config.stable_denom {
-        return Err(StdError::generic_err(
-            format!(
-                "Funds do not match fund denomination: {}",
-                config.stable_denom,
-            )
-        ));
-    }
-
-    let msg_deposit = get_sent_funds(&env, &denom);
+    let msg_deposit = get_sent_funds(&env, &config.stable_denom);
     if msg_deposit.is_zero() {
-        return Err(StdError::generic_err(format!("Missing funds: {}", denom)));
+        return Err(StdError::generic_err(format!(
+            "Missing funds: {}", config.stable_denom,
+        )));
     }
+
+    // Query for the current token balance
+    let token_balance = Cw20Contract(
+        deps.api.human_address(&config.terranames_token)?,
+    ).balance(
+        &deps.querier,
+        env.contract.address,
+    )?;
 
     let mut messages = vec![];
 
     let mut stable_to_send = msg_deposit;
-
-    if !config.initial_tokens_left.is_zero() {
+    let tokens_to_release_left = std::cmp::min(token_balance, state.initial_token_pool);
+    if !tokens_to_release_left.is_zero() {
         // Query for the swap pool exchange rate
         let pair_pool = deps.querier.query::<PoolResponse>(&QueryRequest::Wasm(
             WasmQuery::Smart {
@@ -133,22 +143,26 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
             },
         };
 
-        let max_provide_stable_tax = calculate_tax(deps, &denom, stable_to_send)?;
+        let max_provide_stable_tax = calculate_tax(deps, &config.stable_denom, stable_to_send)?;
         let max_provide_stable = (stable_to_send - max_provide_stable_tax)?;
         let max_provide_tokens = if !pool_stables.is_zero() {
             max_provide_stable.multiply_ratio(pool_tokens.u128(), pool_stables.u128())
         } else {
-            Uint128::from(1u64).multiply_ratio(max_provide_stable, config.init_token_price)
+            let inv_price = Decimal::from_ratio(
+                Decimal::FRACTIONAL,
+                Uint128::from(Decimal::FRACTIONAL) * config.init_token_price,
+            );
+            max_provide_stable * inv_price
         };
 
         // Reduce stablecoins provided if max threshold is hit
-        let (provide_tokens, provide_stable, provide_stable_tax) = if max_provide_tokens > config.initial_tokens_left {
+        let (provide_tokens, provide_stable, provide_stable_tax) = if max_provide_tokens > tokens_to_release_left {
             let reduced_provide_stable = if !pool_tokens.is_zero() {
-                config.initial_tokens_left.multiply_ratio(pool_stables.u128(), pool_tokens.u128())
+                tokens_to_release_left.multiply_ratio(pool_stables.u128(), pool_tokens.u128())
             } else {
-                config.initial_tokens_left.multiply_ratio(config.init_token_price, 1u64)
+                tokens_to_release_left * config.init_token_price
             };
-            (config.initial_tokens_left, reduced_provide_stable, calculate_added_tax(deps, &denom, reduced_provide_stable)?)
+            (tokens_to_release_left, reduced_provide_stable, calculate_added_tax(deps, &config.stable_denom, reduced_provide_stable)?)
         } else {
             (max_provide_tokens, max_provide_stable, max_provide_stable_tax)
         };
@@ -186,7 +200,7 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
                                 },
                                 Asset {
                                     info: AssetInfo::NativeToken {
-                                        denom: denom.clone(),
+                                        denom: config.stable_denom.clone(),
                                     },
                                     amount: provide_stable,
                                 },
@@ -196,7 +210,7 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
                     )?,
                     send: vec![
                         Coin {
-                            denom: denom.clone(),
+                            denom: config.stable_denom.clone(),
                             amount: provide_stable,
                         },
                     ],
@@ -204,15 +218,20 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
             ),
         );
 
-        config.initial_tokens_left = (config.initial_tokens_left - provide_tokens)?;
-        stable_to_send = ((stable_to_send - provide_stable)? - provide_stable_tax)?;
-
-        store_config(&mut deps.storage, &config)?;
+        // Calculate how much of the deposit is left
+        stable_to_send = Uint128::from(
+            stable_to_send.u128().saturating_sub(provide_stable.u128()).saturating_sub(provide_stable_tax.u128())
+        );
+        // Calculate how much of the initial token pool is left
+        state.initial_token_pool = Uint128::from(
+            state.initial_token_pool.u128().saturating_sub(provide_tokens.u128())
+        );
+        store_state(&mut deps.storage, &state)?;
     }
 
     // Use remaining funds to buy back tokens
     if !stable_to_send.is_zero() {
-        let remaining_after_tax = deduct_tax(deps, &denom, stable_to_send)?;
+        let remaining_after_tax = deduct_tax(deps, &config.stable_denom, stable_to_send)?;
         messages.push(
             CosmosMsg::Wasm(
                 WasmMsg::Execute {
@@ -221,7 +240,7 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
                         &PairHandleMsg::Swap {
                             offer_asset: Asset {
                                 info: AssetInfo::NativeToken {
-                                    denom: denom.clone(),
+                                    denom: config.stable_denom.clone(),
                                 },
                                 amount: remaining_after_tax,
                             },
@@ -232,7 +251,7 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
                     )?,
                     send: vec![
                         Coin {
-                            denom: denom.clone(),
+                            denom: config.stable_denom.clone(),
                             amount: remaining_after_tax,
                         },
                     ],
@@ -245,6 +264,7 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
         messages,
         log: vec![
             log("action", "accept_funds"),
+            log("initial_token_pool", state.initial_token_pool),
         ],
         data: None,
     })
@@ -255,6 +275,7 @@ fn handle_burn_excess<S: Storage, A: Api, Q: Querier>(
     env: Env,
 ) -> HandleResult {
     let config = read_config(&deps.storage)?;
+    let state = read_state(&deps.storage)?;
 
     // Query for the current token balance
     let token_balance = Cw20Contract(
@@ -264,7 +285,9 @@ fn handle_burn_excess<S: Storage, A: Api, Q: Querier>(
         env.contract.address,
     )?;
 
-    let tokens_to_burn = (token_balance - config.initial_tokens_left)?;
+    let tokens_to_burn = Uint128::from(
+        token_balance.u128().saturating_sub(state.initial_token_pool.u128())
+    );
     if tokens_to_burn.is_zero() {
         return Err(StdError::generic_err("No tokens to burn"));
     }
@@ -291,6 +314,41 @@ fn handle_burn_excess<S: Storage, A: Api, Q: Querier>(
     })
 }
 
+fn handle_receive<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    wrapper: Cw20ReceiveMsg,
+) -> HandleResult {
+    let msg: ReceiveMsg = match wrapper.msg {
+        Some(bin) => from_binary(&bin),
+        None => Err(StdError::generic_err("No message in cw20 receive")),
+    }?;
+
+    let config = read_config(&deps.storage)?;
+    let mut state = read_state(&deps.storage)?;
+
+    if deps.api.canonical_address(&env.message.sender)? != config.terranames_token {
+        return Err(StdError::unauthorized());
+    }
+
+    match msg {
+        ReceiveMsg::AcceptInitialTokens {} => {
+            state.initial_token_pool += wrapper.amount;
+            store_state(&mut deps.storage, &state)?;
+
+            Ok(HandleResponse {
+                messages: vec![],
+                log: vec![
+                    log("action", "receive"),
+                    log("receive_type", "accept_initial_tokens"),
+                    log("initial_token_pool", state.initial_token_pool),
+                ],
+                data: None,
+            })
+        },
+    }
+}
+
 pub fn query<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     msg: QueryMsg,
@@ -299,10 +357,13 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
         QueryMsg::Config {} => {
             to_binary(&query_config(deps)?)
         },
+        QueryMsg::State {} => {
+            to_binary(&query_state(deps)?)
+        },
     }
 }
 
-pub fn query_config<S: Storage, A: Api, Q: Querier>(
+fn query_config<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
 ) -> StdResult<ConfigResponse> {
     let config = read_config(&deps.storage)?;
@@ -311,6 +372,14 @@ pub fn query_config<S: Storage, A: Api, Q: Querier>(
         terraswap_pair: deps.api.human_address(&config.terraswap_pair)?,
         stable_denom: config.stable_denom,
         init_token_price: config.init_token_price,
-        initial_tokens_left: config.initial_tokens_left,
+    })
+}
+
+fn query_state<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+) -> StdResult<StateResponse> {
+    let state = read_state(&deps.storage)?;
+    Ok(StateResponse {
+        initial_token_pool: state.initial_token_pool,
     })
 }

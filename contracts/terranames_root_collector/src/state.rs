@@ -1,10 +1,10 @@
+use cosmwasm_std::{CanonicalAddr, Decimal, StdResult, Storage, Uint128};
+use cosmwasm_storage::{singleton, singleton_read};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{CanonicalAddr, StdResult, Storage, Uint128};
-use cosmwasm_storage::{singleton, singleton_read};
-
 pub static CONFIG_KEY: &[u8] = b"config";
+pub static STATE_KEY: &[u8] = b"state";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
@@ -14,10 +14,8 @@ pub struct Config {
     pub stable_denom: String,
     /// Terraswap pair
     pub terraswap_pair: CanonicalAddr,
-    /// Initial token price (if the swap pool is empty)
-    pub init_token_price: Uint128,
-    /// Tokens left from the initial allocation
-    pub initial_tokens_left: Uint128,
+    /// Initial token price in stables (used if the swap pool is empty)
+    pub init_token_price: Decimal,
 }
 
 pub fn read_config<S: Storage>(storage: &S) -> StdResult<Config> {
@@ -30,4 +28,22 @@ pub fn store_config<S: Storage>(
     config: &Config,
 ) -> StdResult<()> {
     singleton(storage, CONFIG_KEY).save(config)
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct State {
+    /// Number of tokens in initial release pool
+    pub initial_token_pool: Uint128,
+}
+
+pub fn read_state<S: Storage>(storage: &S) -> StdResult<State> {
+    singleton_read(storage, STATE_KEY).load()
+}
+
+#[must_use]
+pub fn store_state<S: Storage>(
+    storage: &mut S,
+    state: &State,
+) -> StdResult<()> {
+    singleton(storage, STATE_KEY).save(state)
 }

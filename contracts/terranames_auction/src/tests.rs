@@ -333,14 +333,13 @@ fn initial_non_zero_bid() {
 
             let msg: CollectorHandleMsg = from_binary(&msg).unwrap();
             match msg {
-                CollectorHandleMsg::AcceptFunds(AcceptFunds { denom, source_addr }) => {
-                    assert_eq!(denom, ABC_COIN);
+                CollectorHandleMsg::AcceptFunds(AcceptFunds { source_addr }) => {
                     assert_eq!(source_addr.as_str(), "bidder");
                 },
-                _ => panic!("Unexpected message"),
+                _ => panic!("Unexpected message: {:?}", msg),
             }
         },
-        _ => panic!("Unexpected message type"),
+        _ => panic!("Unexpected message type: {:?}", send_to_collector_msg),
     }
 
     NameStateAsserter::new("example")
@@ -679,6 +678,74 @@ fn bid_on_expired_name() {
         .assert(&deps);
 }
 
+// Bid on name that expired during a transition
+#[test]
+fn bid_on_expired_name_in_transition() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    // Change min lease blocks so the name can expire during a transition.
+    let mut msg = default_init();
+    msg.min_lease_blocks = msg.counter_delay_blocks;
+    msg.bid_delay_blocks = 10000;
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    // Initial bid
+    let bid_1_block = 1234;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_1", bid_1_block)
+        .deposit(deposit_amount)
+        .rate(123)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Second bid
+    let bid_2_block = bid_1_block + 86400 + 10000;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_2", bid_2_block)
+        .deposit(deposit_amount)
+        .rate(130)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    // Request rate change to let it expire during transition
+    let set_rate_block = bid_2_block + 86400;
+    let env = mock_env("bidder_2", &[]).at_block_height(set_rate_block);
+    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+        name: "example".to_string(),
+        rate: Uint128::from(10000u64),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Bid after expiration
+    let bid_3_block = set_rate_block + 98800;
+    let deposit_amount = 1_000;
+    let res = Bid::on("example", "bidder_3", bid_3_block)
+        .deposit(deposit_amount)
+        .rate(125)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // TODO Transition delay could be based on the beginning of the transition
+    // before the name expired but is currently based on when it expired.
+    NameStateAsserter::new("example")
+        .owner("bidder_3")
+        .previous_owner(None)
+        .rate(125)
+        .begin_block(bid_3_block)
+        .begin_deposit(1_000)
+        .counter_delay_end(bid_3_block + 86400)
+        .transition_delay_end(bid_3_block + 86400 + 259200)
+        .bid_delay_end(bid_3_block + 86400 + 10000)
+        .expire_block(Some(bid_3_block + 8000000))
+        .assert(&deps);
+}
+
 // TODO More bidding test cases needed here
 
 #[test]
@@ -767,8 +834,7 @@ fn fund_name() {
 
             let msg: CollectorHandleMsg = from_binary(&msg).unwrap();
             match msg {
-                CollectorHandleMsg::AcceptFunds(AcceptFunds { denom, source_addr }) => {
-                    assert_eq!(denom, ABC_COIN);
+                CollectorHandleMsg::AcceptFunds(AcceptFunds { source_addr }) => {
                     assert_eq!(source_addr.as_str(), "funder");
                 },
             }
@@ -1584,20 +1650,6 @@ fn set_controller_during_counter_delay() {
         .assert(&deps);
 }
 
-// Edge cases:
-// - Name expires during transition. A new bid should not cancel the transition
-//   period.
-// - Funding an expired name should fail maybe? There may be some cases where
-//   this is useful. Alternative is to bid on the expired name (this is more
-//   efficient since you are only paying starting from the current block) but
-//   if it has a different owner you need to then transfer it.
-// - Not allowed: Bid on name, change rate (not allowed until after counter
-//   delay).
-// - Maybe should be allowed to lower the rate even if that causes less than
-//   min lease blocks to be bought from current point in time as long as
-//   min lease blocks were bought counted from the original begin deposit. Does
-//   fund have the same issue?
-//
 // Question:
 // - Is max lease blocks a good idea? It is supposed to alleviate any weirdness
 //   from people extending their lease 1000 years into the future. Since they

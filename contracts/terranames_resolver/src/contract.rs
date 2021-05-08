@@ -54,7 +54,11 @@ fn handle_set_value<S: Storage, A: Api, Q: Querier>(
     )?;
 
     // ensure name controller permission
-    if env.message.sender != name_state.controller {
+    if let Some(controller) = name_state.controller {
+        if env.message.sender != controller {
+            return Err(StdError::unauthorized());
+        }
+    } else {
         return Err(StdError::unauthorized());
     }
 

@@ -2,7 +2,7 @@ pub mod contract;
 pub mod state;
 
 #[cfg(test)]
-mod testing;
+mod tests;
 
 #[cfg(test)]
 mod mock_querier;

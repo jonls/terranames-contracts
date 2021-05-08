@@ -19,6 +19,7 @@ cw20 = "0.2.3"
 schemars = "0.7"
 serde = { version = "1.0.103", default-features = false, features = ["derive"] }
 snafu = { version = "0.6.3" }
+terra-cosmwasm = "1.2.4"
 terranames = { path = "../../packages/terranames", default-features = false, version = "0.1.0"}
 terraswap = "1.2.0"
 

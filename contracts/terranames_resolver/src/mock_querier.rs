@@ -1,14 +1,12 @@
 use cosmwasm_std::{
-    from_slice, Coin, Extern, HumanAddr, Querier, QuerierResult, QueryRequest,
-    SystemError,
+    from_slice, Coin, Empty, Extern, HumanAddr, Querier, QuerierResult,
+    QueryRequest, SystemError,
 };
 use cosmwasm_std::testing::{
     MockApi, MockQuerier as CosmMockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
 };
-use terra_cosmwasm::{
-    TerraQueryWrapper,
-};
-use terranames::testing::terra::TaxQuerier;
+
+use terranames::testing::auction::AuctionQuerier;
 
 pub fn mock_dependencies(
     canonical_length: usize,
@@ -26,30 +24,30 @@ pub fn mock_dependencies(
 }
 
 pub struct MockQuerier {
-    pub tax_querier: TaxQuerier,
-    pub base_querier: CosmMockQuerier<TerraQueryWrapper>,
+    pub auction_querier: AuctionQuerier,
+    pub base_querier: CosmMockQuerier<Empty>,
 }
 
 impl MockQuerier {
     pub fn new() -> MockQuerier {
         MockQuerier {
-            tax_querier: TaxQuerier::default(),
+            auction_querier: AuctionQuerier::new(),
             base_querier: CosmMockQuerier::new(&[]),
         }
     }
 
-    pub fn with_base_querier(mut self, base_querier: CosmMockQuerier<TerraQueryWrapper>) -> Self {
+    pub fn with_base_querier(mut self, base_querier: CosmMockQuerier<Empty>) -> Self {
         self.base_querier = base_querier;
         self
     }
 
-    pub fn with_tax_querier(mut self, tax_querier: TaxQuerier) -> Self {
-        self.tax_querier = tax_querier;
+    pub fn with_auction_querier(mut self, wasm_querier: AuctionQuerier) -> Self {
+        self.auction_querier = wasm_querier;
         self
     }
 
-    fn handle_query(&self, request: QueryRequest<TerraQueryWrapper>) -> QuerierResult {
-        if let Some(res) = self.tax_querier.handle_query(&request) {
+    fn handle_query(&self, request: QueryRequest<Empty>) -> QuerierResult {
+        if let Some(res) = self.auction_querier.handle_query(&request) {
             return res;
         }
         self.base_querier.handle_query(&request)
@@ -58,7 +56,7 @@ impl MockQuerier {
 
 impl Querier for MockQuerier {
     fn raw_query(&self, bin_request: &[u8]) -> QuerierResult {
-        let request: QueryRequest<TerraQueryWrapper> = match from_slice(bin_request) {
+        let request: QueryRequest<Empty> = match from_slice(bin_request) {
             Ok(v) => v,
             Err(e) => {
                 return Err(SystemError::InvalidRequest {
