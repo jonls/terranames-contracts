@@ -142,6 +142,8 @@ fn accept_funds_releases_tokens() {
     })).unwrap();
     assert_eq!(res.messages.len(), 2);
 
+    // Expect first message to increase the allowance for the terraswap pair to
+    // be able to withdraw tokens when providing liquidity.
     let increase_allowance_message = &res.messages[0];
     match increase_allowance_message {
         CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
@@ -160,6 +162,7 @@ fn accept_funds_releases_tokens() {
         _ => panic!("Unexpected message type: {:?}", increase_allowance_message),
     }
 
+    // Expect second message to provide liquidity to the terraswap pair.
     let provide_liquidity_message = &res.messages[1];
     match provide_liquidity_message {
         CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
@@ -191,4 +194,110 @@ fn accept_funds_releases_tokens() {
     let res = query(&deps, QueryMsg::State {}).unwrap();
     let state: StateResponse = from_binary(&res).unwrap();
     assert_eq!(state.initial_token_pool.u128(), initial_token_amount - expected_tokens_released);
+}
+
+#[test]
+fn accept_funds_buys_tokens() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    deps.querier.terraswap_querier.pair = Some(default_pair_info());
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Let the collector accept funds from the auction
+    let deposit = 1_491_362;
+    let tax_amount = 6016;
+
+    let env = mock_env("auction_contract", &coins(deposit, ABC_COIN));
+    let res = handle(&mut deps, env, HandleMsg::AcceptFunds(AcceptFunds {
+        source_addr: "source".into(),
+    })).unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // There are no initially deposited tokens in the contract so expect
+    // the first message to swap stable denom to tokens
+    let swap_message = &res.messages[0];
+    match swap_message {
+        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+            assert_eq!(contract_addr.as_str(), "token_stable_pair");
+            assert_eq!(send, &coins(deposit - tax_amount, ABC_COIN));
+
+            match from_binary(&msg).unwrap() {
+                PairHandleMsg::Swap { offer_asset, to, belief_price, max_spread } => {
+                    assert_eq!(offer_asset, Asset {
+                        info: AssetInfo::NativeToken {
+                            denom: ABC_COIN.into(),
+                        },
+                        amount: Uint128::from(deposit - tax_amount),
+                    });
+                    assert_eq!(to, None);
+                    assert_eq!(belief_price, None);
+                    assert_eq!(max_spread, None);
+                },
+                _ => panic!("Unexpected message: {:?}", msg),
+            }
+        },
+        _ => panic!("Unexpected message type: {:?}", swap_message),
+    }
+
+    let res = query(&deps, QueryMsg::State {}).unwrap();
+    let state: StateResponse = from_binary(&res).unwrap();
+    assert_eq!(state.initial_token_pool.u128(), 0);
+}
+
+#[test]
+fn accept_funds_buys_tokens() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    deps.querier.terraswap_querier.pair = Some(default_pair_info());
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Let the collector accept funds from the auction
+    let deposit = 1_491_362;
+    let tax_amount = 6016;
+
+    let env = mock_env("auction_contract", &coins(deposit, ABC_COIN));
+    let res = handle(&mut deps, env, HandleMsg::AcceptFunds(AcceptFunds {
+        source_addr: "source".into(),
+    })).unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // There are no initially deposited tokens in the contract so expect
+    // the first message to swap stable denom to tokens
+    let swap_message = &res.messages[0];
+    match swap_message {
+        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+            assert_eq!(contract_addr.as_str(), "token_stable_pair");
+            assert_eq!(send, &coins(deposit - tax_amount, ABC_COIN));
+
+            match from_binary(&msg).unwrap() {
+                PairHandleMsg::Swap { offer_asset, to, belief_price, max_spread } => {
+                    assert_eq!(offer_asset, Asset {
+                        info: AssetInfo::NativeToken {
+                            denom: ABC_COIN.into(),
+                        },
+                        amount: Uint128::from(deposit - tax_amount),
+                    });
+                    assert_eq!(to, None);
+                    assert_eq!(belief_price, None);
+                    assert_eq!(max_spread, None);
+                },
+                _ => panic!("Unexpected message: {:?}", msg),
+            }
+        },
+        _ => panic!("Unexpected message type: {:?}", swap_message),
+    }
+
+    let res = query(&deps, QueryMsg::State {}).unwrap();
+    let state: StateResponse = from_binary(&res).unwrap();
+    assert_eq!(state.initial_token_pool.u128(), 0);
 }
