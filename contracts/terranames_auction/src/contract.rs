@@ -6,7 +6,8 @@ use cosmwasm_std::{
 
 use terranames::auction::{
     deposit_from_blocks_ceil, deposit_from_blocks_floor, ConfigResponse,
-    HandleMsg, InitMsg, NameStateResponse, QueryMsg,
+    AllNameStatesResponse, HandleMsg, InitMsg, NameStateItem, NameStateResponse,
+    QueryMsg,
 };
 use terranames::collector::{
     AcceptFunds, HandleMsg as CollectorHandleMsg,
@@ -14,8 +15,8 @@ use terranames::collector::{
 use terranames::terra::deduct_coin_tax;
 
 use crate::state::{
-    read_config, read_name_state, read_option_name_state, store_config,
-    store_name_state, Config, NameState, OwnerStatus,
+    collect_name_states, read_config, read_name_state, read_option_name_state,
+    store_config, store_name_state, Config, NameState, OwnerStatus,
 };
 
 /// Return the funds of type denom attached in the request.
@@ -538,6 +539,9 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
         QueryMsg::GetNameState { name } => {
             to_binary(&query_name_state(deps, name)?)
         },
+        QueryMsg::GetAllNameStates { start_after, limit } => {
+            to_binary(&query_all_name_states(deps, start_after, limit)?)
+        },
     }
 }
 
@@ -587,5 +591,52 @@ fn query_name_state<S: Storage, A: Api, Q: Querier>(
         transition_delay_end: name_state.transition_delay_end(&config),
         bid_delay_end: name_state.bid_delay_end(&config),
         expire_block: name_state.expire_block(),
+    })
+}
+
+fn query_all_name_states<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<AllNameStatesResponse> {
+    let config = read_config(&deps.storage)?;
+    let name_states = collect_name_states(
+        &deps.storage,
+        start_after.as_deref(),
+        limit,
+    )?;
+
+    let names: StdResult<Vec<NameStateItem>> = name_states.into_iter().map(|(name, name_state)| {
+        let previous_owner = if name_state.previous_owner != CanonicalAddr::default() {
+            Some(deps.api.human_address(&name_state.previous_owner)?)
+        } else {
+            None
+        };
+
+        let controller = if name_state.controller != CanonicalAddr::default() {
+            Some(deps.api.human_address(&name_state.controller)?)
+        } else {
+            None
+        };
+
+        Ok(NameStateItem {
+            name,
+            state: NameStateResponse {
+                owner: deps.api.human_address(&name_state.owner)?,
+                controller,
+                rate: name_state.rate,
+                begin_block: name_state.begin_block,
+                begin_deposit: name_state.begin_deposit,
+                previous_owner,
+                counter_delay_end: name_state.counter_delay_end(&config),
+                transition_delay_end: name_state.transition_delay_end(&config),
+                bid_delay_end: name_state.bid_delay_end(&config),
+                expire_block: name_state.expire_block(),
+           }
+        })
+    }).collect();
+
+    Ok(AllNameStatesResponse {
+        names: names?,
     })
 }

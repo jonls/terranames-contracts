@@ -5,7 +5,8 @@ use cosmwasm_std::{
 use cosmwasm_std::testing::mock_env;
 
 use terranames::auction::{
-    ConfigResponse, HandleMsg, InitMsg, NameStateResponse, QueryMsg,
+    AllNameStatesResponse, ConfigResponse, HandleMsg, InitMsg,
+    NameStateResponse, QueryMsg,
 };
 use terranames::collector::{
     AcceptFunds, HandleMsg as CollectorHandleMsg,
@@ -1648,6 +1649,70 @@ fn set_controller_during_counter_delay() {
         .owner("bidder_2")
         .controller(Some("controller_2"))
         .assert(&deps);
+}
+
+#[test]
+fn query_all_name_states() {
+    let mut deps = mock_dependencies(20, &[]);
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(0, res.messages.len());
+
+    // First bid
+    let bid_1_block = 1234;
+    let deposit_amount: u128 = 5_670;
+    let res = Bid::on("example", "bidder_1", bid_1_block)
+        .deposit(deposit_amount)
+        .rate(600)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Second bid
+    let bid_2_block = 2342748;
+    let deposit_amount: u128 = 1_000;
+    let res = Bid::on("other", "bidder_2", bid_2_block)
+        .deposit(deposit_amount)
+        .rate(124)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Third bid
+    let bid_3_block = 2367901;
+    let deposit_amount: u128 = 1_200_000;
+    let res = Bid::on("abc-def", "bidder_1", bid_3_block)
+        .deposit(deposit_amount)
+        .rate(140_000)
+        .handle(&mut deps)
+        .unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    let res = query(&deps, QueryMsg::GetAllNameStates {
+        start_after: None,
+        limit: Some(2),
+    }).unwrap();
+    let state: AllNameStatesResponse = from_binary(&res).unwrap();
+    assert_eq!(state.names.len(), 2);
+
+    assert_eq!(state.names[0].name, "abc-def");
+    assert_eq!(state.names[0].state.rate.u128(), 140_000);
+    assert_eq!(state.names[1].name, "example");
+    assert_eq!(state.names[1].state.rate.u128(), 600);
+
+    // Query for second page
+    let res = query(&deps, QueryMsg::GetAllNameStates {
+        start_after: Some("example".into()),
+        limit: Some(2),
+    }).unwrap();
+    let state: AllNameStatesResponse = from_binary(&res).unwrap();
+    assert_eq!(state.names.len(), 1);
+
+    assert_eq!(state.names[0].name, "other");
+    assert_eq!(state.names[0].state.rate.u128(), 124);
 }
 
 // Question:

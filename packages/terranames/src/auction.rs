@@ -66,6 +66,12 @@ pub enum QueryMsg {
         /// Name to obtain state for
         name: String,
     },
+    GetAllNameStates {
+        /// Start after (for pagination)
+        start_after: Option<String>,
+        /// Number of values to return
+        limit: Option<u32>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -113,6 +119,17 @@ pub struct NameStateResponse {
     pub expire_block: Option<u64>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct NameStateItem {
+    pub name: String,
+    pub state: NameStateResponse,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct AllNameStatesResponse {
+    pub names: Vec<NameStateItem>,
+}
+
 /// Return deposit needed for blocks and rate rounded down.
 ///
 /// Rounded down to nearest raw unit (e.g. to 1 uusd NOT 1 whole usd).
@@ -127,8 +144,6 @@ pub fn deposit_from_blocks_ceil(blocks: u64, rate: Uint128) -> Uint128 {
     let a = blocks as u128 * rate.u128() + RATE_BLOCK_DENOM as u128 - 1;
     Uint128::from(1u64).multiply_ratio(a, RATE_BLOCK_DENOM)
 }
-
-// int(((blocks * rate) + (RATE_BLOCK_DENOM-1))/RATE_BLOCK_DENOM)
 
 /// Return number of blocks corresponding to deposit and rate
 pub fn blocks_from_deposit(deposit: Uint128, rate: Uint128) -> Option<u64> {

@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{CanonicalAddr, StdResult, Storage, Uint128};
+use cosmwasm_std::{CanonicalAddr, Order, StdError, StdResult, Storage, Uint128};
 use cosmwasm_storage::{
     bucket, bucket_read, singleton, singleton_read,
 };
@@ -10,6 +10,17 @@ use terranames::auction::{blocks_from_deposit, deposit_from_blocks_floor};
 
 pub static CONFIG_KEY: &[u8] = b"config";
 pub static NAME_STATE_PREFIX: &[u8] = b"name";
+
+const DEFAULT_LIMIT: u32 = 10;
+const MAX_LIMIT: u32 = 30;
+
+fn calc_range_start_str(start_after: Option<&str>) -> Option<Vec<u8>> {
+    start_after.map(|s| {
+        let mut v: Vec<u8> = s.into();
+        v.push(0);
+        v
+    })
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
@@ -244,6 +255,25 @@ pub fn read_option_name_state<S: Storage>(
     name: &str,
 ) -> StdResult<Option<NameState>> {
     bucket_read(NAME_STATE_PREFIX, storage).may_load(name.as_bytes())
+}
+
+pub fn collect_name_states<S: Storage>(
+    storage: &S,
+    start_after: Option<&str>,
+    limit: Option<u32>,
+) -> StdResult<Vec<(String, NameState)>> {
+    let bucket = bucket_read(NAME_STATE_PREFIX, storage);
+    let start = calc_range_start_str(start_after);
+    let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
+    bucket.range(start.as_deref(), None, Order::Ascending)
+        .take(limit)
+        .map(|item| {
+            let (key, value) = item?;
+            let key = String::from_utf8(key)
+                .or_else(|_| Err(StdError::generic_err("Invalid utf-8")))?;
+            Ok((key, value))
+        })
+        .collect()
 }
 
 #[must_use]
