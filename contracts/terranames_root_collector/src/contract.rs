@@ -1,12 +1,14 @@
 use cosmwasm_std::{
     from_binary, log, to_binary, Api, Binary, Coin, CosmosMsg, Decimal, Env,
-    Extern, HandleResponse, HandleResult, InitResponse, InitResult, Querier,
-    QueryRequest, StdError, StdResult, Storage, Uint128, WasmMsg, WasmQuery,
+    Extern, HandleResponse, HandleResult, MigrateResponse, MigrateResult,
+    InitResponse, InitResult, Querier, QueryRequest, StdError, StdResult,
+    Storage, Uint128, WasmMsg, WasmQuery,
 };
 
 use cw20::{Cw20Contract, Cw20HandleMsg, Cw20ReceiveMsg};
 use terranames::root_collector::{
-    ConfigResponse, HandleMsg, InitMsg, ReceiveMsg, StateResponse, QueryMsg,
+    ConfigResponse, HandleMsg, InitMsg, MigrateMsg, ReceiveMsg, StateResponse,
+    QueryMsg,
 };
 use terranames::terra::{calculate_added_tax, calculate_tax, deduct_tax};
 use terranames::utils::FractionInv;
@@ -379,4 +381,12 @@ fn query_state<S: Storage, A: Api, Q: Querier>(
     Ok(StateResponse {
         initial_token_pool: state.initial_token_pool,
     })
+}
+
+pub fn migrate<S: Storage, A: Api, Q: Querier>(
+    _deps: &mut Extern<S, A, Q>,
+    _env: Env,
+    _msg: MigrateMsg,
+) -> MigrateResult {
+    Ok(MigrateResponse::default())
 }

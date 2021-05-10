@@ -1,13 +1,14 @@
 use cosmwasm_std::{
     log, to_binary, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg,
     Env, Extern, HandleResponse, HandleResult, HumanAddr, InitResponse,
-    InitResult, Querier, StdError, StdResult, Storage, Uint128,
+    InitResult, MigrateResponse, MigrateResult, Querier, StdError, StdResult,
+    Storage, Uint128,
 };
 
 use terranames::auction::{
     deposit_from_blocks_ceil, deposit_from_blocks_floor, ConfigResponse,
-    AllNameStatesResponse, HandleMsg, InitMsg, NameStateItem, NameStateResponse,
-    QueryMsg,
+    AllNameStatesResponse, HandleMsg, InitMsg, MigrateMsg, NameStateItem,
+    NameStateResponse, QueryMsg,
 };
 use terranames::terra::deduct_coin_tax;
 
@@ -636,4 +637,12 @@ fn query_all_name_states<S: Storage, A: Api, Q: Querier>(
     Ok(AllNameStatesResponse {
         names: names?,
     })
+}
+
+pub fn migrate<S: Storage, A: Api, Q: Querier>(
+    _deps: &mut Extern<S, A, Q>,
+    _env: Env,
+    _msg: MigrateMsg,
+) -> MigrateResult {
+    Ok(MigrateResponse::default())
 }

@@ -1,11 +1,13 @@
 use cosmwasm_std::{
     log, to_binary, Api, Binary, Env, Extern, HandleResponse, HandleResult,
-    InitResponse, InitResult, Querier, StdError, StdResult, Storage,
+    InitResponse, InitResult, MigrateResponse, MigrateResult, Querier,
+    StdError, StdResult, Storage,
 };
 
 use terranames::querier::query_name_state;
 use terranames::resolver::{
-    ConfigResponse, InitMsg, HandleMsg, QueryMsg, ResolveNameResponse,
+    ConfigResponse, InitMsg, HandleMsg, MigrateMsg, QueryMsg,
+    ResolveNameResponse,
 };
 
 use crate::state::{
@@ -124,4 +126,12 @@ fn query_resolve<S: Storage, A: Api, Q: Querier>(
         value: name_value,
         expire_block: name_state.expire_block,
     })
+}
+
+pub fn migrate<S: Storage, A: Api, Q: Querier>(
+    _deps: &mut Extern<S, A, Q>,
+    _env: Env,
+    _msg: MigrateMsg,
+) -> MigrateResult {
+    Ok(MigrateResponse::default())
 }
