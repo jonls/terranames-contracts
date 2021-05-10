@@ -9,7 +9,7 @@ use terranames::root_collector::{
     ConfigResponse, HandleMsg, InitMsg, ReceiveMsg, StateResponse, QueryMsg,
 };
 use terranames::terra::{calculate_added_tax, calculate_tax, deduct_tax};
-use terranames::utils::FractionDenom;
+use terranames::utils::FractionInv;
 use terraswap::asset::{Asset, AssetInfo};
 use terraswap::pair::{
     HandleMsg as PairHandleMsg, QueryMsg as PairQueryMsg,
@@ -26,8 +26,8 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     env: Env,
     msg: InitMsg,
 ) -> InitResult {
-    if msg.init_token_price.is_zero() {
-        return Err(StdError::generic_err("init_token_price must be non-zero"));
+    if msg.min_token_price.is_zero() {
+        return Err(StdError::generic_err("min_token_price must be non-zero"));
     }
 
     let terranames_token = deps.api.canonical_address(&msg.terranames_token)?;
@@ -49,7 +49,7 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
         terranames_token: deps.api.canonical_address(&msg.terranames_token)?,
         terraswap_pair: deps.api.canonical_address(&pair.contract_addr)?,
         stable_denom: msg.stable_denom,
-        init_token_price: msg.init_token_price,
+        min_token_price: msg.min_token_price,
     };
 
     store_config(&mut deps.storage, &config)?;
@@ -134,23 +134,31 @@ fn handle_consume_excess_stable<S: Storage, A: Api, Q: Querier>(
 
         let max_provide_stable_tax = calculate_tax(deps, &config.stable_denom, stable_to_send)?;
         let max_provide_stable = (stable_to_send - max_provide_stable_tax)?;
-        let max_provide_tokens = if !pool_stables.is_zero() {
-            max_provide_stable.multiply_ratio(pool_tokens.u128(), pool_stables.u128())
+        let max_tokens_per_stable = config.min_token_price.inv()
+            .ok_or(StdError::generic_err("Invalid token price"))?;
+
+        let stable_price_in_tokens = if !pool_stables.is_zero() {
+            std::cmp::min(
+                Decimal::from_ratio(pool_tokens, pool_stables),
+                max_tokens_per_stable,
+            )
         } else {
-            let inv_price = Decimal::from_ratio(
-                Decimal::FRACTIONAL,
-                Uint128::from(Decimal::FRACTIONAL) * config.init_token_price,
-            );
-            max_provide_stable * inv_price
+            max_tokens_per_stable
         };
+        let max_provide_tokens = max_provide_stable * stable_price_in_tokens;
 
         // Reduce stablecoins provided if max threshold is hit
         let (provide_tokens, provide_stable, provide_stable_tax) = if max_provide_tokens > tokens_to_release_left {
-            let reduced_provide_stable = if !pool_tokens.is_zero() {
-                tokens_to_release_left.multiply_ratio(pool_stables.u128(), pool_tokens.u128())
+            let min_stables_per_token = config.min_token_price;
+            let token_price_in_stables = if !pool_tokens.is_zero() {
+                std::cmp::max(
+                    Decimal::from_ratio(pool_stables, pool_tokens),
+                    min_stables_per_token,
+                )
             } else {
-                tokens_to_release_left * config.init_token_price
+                min_stables_per_token
             };
+            let reduced_provide_stable = tokens_to_release_left * token_price_in_stables;
             (tokens_to_release_left, reduced_provide_stable, calculate_added_tax(deps, &config.stable_denom, reduced_provide_stable)?)
         } else {
             (max_provide_tokens, max_provide_stable, max_provide_stable_tax)
@@ -360,7 +368,7 @@ fn query_config<S: Storage, A: Api, Q: Querier>(
         terranames_token: deps.api.human_address(&config.terranames_token)?,
         terraswap_pair: deps.api.human_address(&config.terraswap_pair)?,
         stable_denom: config.stable_denom,
-        init_token_price: config.init_token_price,
+        min_token_price: config.min_token_price,
     })
 }
 

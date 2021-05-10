@@ -20,7 +20,7 @@ fn default_init() -> InitMsg {
         terraswap_factory: HumanAddr::from("terraswap_factory"),
         terranames_token: HumanAddr::from("token_contract"),
         stable_denom: ABC_COIN.into(),
-        init_token_price: Decimal::from_ratio(1u64, 10u64),
+        min_token_price: Decimal::from_ratio(1u64, 10u64),
     }
 }
 
@@ -57,7 +57,7 @@ fn proper_initialization() {
     assert_eq!(config.terranames_token.as_str(), "token_contract");
     assert_eq!(config.terraswap_pair.as_str(), "token_stable_pair");
     assert_eq!(config.stable_denom, "uabc");
-    assert_eq!(config.init_token_price, Decimal::from_ratio(10u64, 100u64));
+    assert_eq!(config.min_token_price, Decimal::from_ratio(10u64, 100u64));
 
     let res = query(&deps, QueryMsg::State {}).unwrap();
     let state: StateResponse = from_binary(&res).unwrap();

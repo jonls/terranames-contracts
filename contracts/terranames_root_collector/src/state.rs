@@ -14,8 +14,11 @@ pub struct Config {
     pub stable_denom: String,
     /// Terraswap pair
     pub terraswap_pair: CanonicalAddr,
-    /// Initial token price in stables (used if the swap pool is empty)
-    pub init_token_price: Decimal,
+    /// Minimum token price in stables (also used if the swap pool is empty)
+    ///
+    /// Tokens are not released to the swap pool at a lower implied price than
+    /// this (in stablecoin/token).
+    pub min_token_price: Decimal,
 }
 
 pub fn read_config<S: Storage>(storage: &S) -> StdResult<Config> {

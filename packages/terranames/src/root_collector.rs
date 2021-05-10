@@ -13,8 +13,11 @@ pub struct InitMsg {
     pub terranames_token: HumanAddr,
     /// Stablecoin denomination
     pub stable_denom: String,
-    /// Initial token price in stables (used if the swap pool is empty)
-    pub init_token_price: Decimal,
+    /// Minimum token price in stables (also used if the swap pool is empty)
+    ///
+    /// Tokens are not released to the swap pool at a lower implied price than
+    /// this (in tokens/stablecoin).
+    pub min_token_price: Decimal,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -41,8 +44,11 @@ pub struct ConfigResponse {
     pub terraswap_pair: HumanAddr,
     /// Stablecoin denomination
     pub stable_denom: String,
-    /// Initial token price in stables (used if the swap pool is empty)
-    pub init_token_price: Decimal,
+    /// Minimum token price in stables (also used if the swap pool is empty)
+    ///
+    /// Tokens are not released to the swap pool at a lower implied price than
+    /// this (in stablecoin/token).
+    pub min_token_price: Decimal,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
