@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     from_binary, to_binary, Binary, HumanAddr, QuerierResult, QueryRequest,
-    SystemError, Uint128, WasmQuery,
+    SystemError, WasmQuery,
 };
 use terraswap::asset::{Asset, PairInfo};
 use terraswap::factory::QueryMsg as FactoryQueryMsg;
@@ -11,9 +11,9 @@ use terraswap::pair::{QueryMsg as PairQueryMsg, PoolResponse};
 pub struct TerraswapQuerier {
     pub factory_addr: HumanAddr,
     pub pair: Option<PairInfo>,
-    pub pair_total_share: Uint128,
-    pub pair_1_amount: Uint128,
-    pub pair_2_amount: Uint128,
+    pub pair_total_share: u128,
+    pub pair_1_amount: u128,
+    pub pair_2_amount: u128,
 }
 
 impl TerraswapQuerier {
@@ -21,9 +21,9 @@ impl TerraswapQuerier {
         Self {
             factory_addr,
             pair: None,
-            pair_total_share: Uint128::zero(),
-            pair_1_amount: Uint128::zero(),
-            pair_2_amount: Uint128::zero(),
+            pair_total_share: 0,
+            pair_1_amount: 0,
+            pair_2_amount: 0,
         }
     }
 
@@ -76,14 +76,14 @@ impl TerraswapQuerier {
                         assets: [
                             Asset {
                                 info: pair.asset_infos[0].clone(),
-                                amount: Uint128::zero(),
+                                amount: self.pair_1_amount.into(),
                             },
                             Asset {
                                 info: pair.asset_infos[1].clone(),
-                                amount: Uint128::zero(),
+                                amount: self.pair_2_amount.into(),
                             },
                         ],
-                        total_share: Uint128::from(1_000_000u64),
+                        total_share: self.pair_total_share.into(),
                     }))
                 } else {
                     return Some(Err(SystemError::InvalidRequest {

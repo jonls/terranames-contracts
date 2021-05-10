@@ -4,7 +4,6 @@ use cosmwasm_std::{
 };
 use cosmwasm_std::testing::{mock_env, MOCK_CONTRACT_ADDR};
 use cw20::{Cw20HandleMsg, Cw20ReceiveMsg};
-use terranames::collector::AcceptFunds;
 use terranames::root_collector::{
     ConfigResponse, HandleMsg, InitMsg, QueryMsg, ReceiveMsg, StateResponse,
 };
@@ -107,8 +106,11 @@ fn provide_initial_token_pool() {
 }
 
 #[test]
-fn accept_funds_releases_tokens() {
-    let mut deps = mock_dependencies(20, &[]);
+fn accept_funds_releases_tokens_into_empty_pool() {
+    // Create contract with balance simulating that the auction has deposited
+    // some funds already.
+    let deposit = 1_491_362;
+    let mut deps = mock_dependencies(20, &coins(deposit, ABC_COIN));
 
     let msg = default_init();
     let env = mock_env("creator", &[]);
@@ -131,15 +133,110 @@ fn accept_funds_releases_tokens() {
     })).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    // Let the collector accept funds from the auction
-    let deposit = 1_491_362;
+    // Activate the consume stable coin funds endpoint. The pool is empty so this
+    // should use the initial price from the contract init.
     let tax_amount = 6016;
     let expected_tokens_released = 14_853_460;
 
-    let env = mock_env("auction_contract", &coins(deposit, ABC_COIN));
-    let res = handle(&mut deps, env, HandleMsg::AcceptFunds(AcceptFunds {
-        source_addr: "source".into(),
+    let env = mock_env("user", &[]);
+    let res = handle(&mut deps, env, HandleMsg::ConsumeExcessStable {}).unwrap();
+    assert_eq!(res.messages.len(), 2);
+
+    // Expect first message to increase the allowance for the terraswap pair to
+    // be able to withdraw tokens when providing liquidity.
+    let increase_allowance_message = &res.messages[0];
+    match increase_allowance_message {
+        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+            assert_eq!(contract_addr.as_str(), "token_contract");
+            assert_eq!(send, &[]);
+
+            match from_binary(&msg).unwrap() {
+                Cw20HandleMsg::IncreaseAllowance { spender, amount, expires } => {
+                    assert_eq!(spender.as_str(), "token_stable_pair");
+                    assert_eq!(amount.u128(), expected_tokens_released);
+                    assert_eq!(expires, None);
+                },
+                _ => panic!("Unexpected message: {:?}", msg),
+            }
+        },
+        _ => panic!("Unexpected message type: {:?}", increase_allowance_message),
+    }
+
+    // Expect second message to provide liquidity to the terraswap pair.
+    let provide_liquidity_message = &res.messages[1];
+    match provide_liquidity_message {
+        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+            assert_eq!(contract_addr.as_str(), "token_stable_pair");
+            assert_eq!(send, &coins(deposit - tax_amount, ABC_COIN));
+
+            match from_binary(&msg).unwrap() {
+                PairHandleMsg::ProvideLiquidity { assets, slippage_tolerance } => {
+                    assert_eq!(assets[0], Asset {
+                        info: AssetInfo::Token {
+                            contract_addr: "token_contract".into(),
+                        },
+                        amount: Uint128::from(expected_tokens_released),
+                    });
+                    assert_eq!(assets[1], Asset {
+                        info: AssetInfo::NativeToken {
+                            denom: ABC_COIN.into(),
+                        },
+                        amount: Uint128::from(deposit - tax_amount),
+                    });
+                    assert_eq!(slippage_tolerance, None);
+                },
+                _ => panic!("Unexpected message: {:?}", msg),
+            }
+        },
+        _ => panic!("Unexpected message type: {:?}", provide_liquidity_message),
+    }
+
+    let res = query(&deps, QueryMsg::State {}).unwrap();
+    let state: StateResponse = from_binary(&res).unwrap();
+    assert_eq!(state.initial_token_pool.u128(), initial_token_amount - expected_tokens_released);
+}
+
+#[test]
+fn accept_funds_releases_tokens_into_existing_pool() {
+    // Create contract with balance simulating that the auction has deposited
+    // some funds already.
+    let deposit = 1_491_362;
+    let mut deps = mock_dependencies(20, &coins(deposit, ABC_COIN));
+
+    let msg = default_init();
+    let env = mock_env("creator", &[]);
+
+    deps.querier.terraswap_querier.pair = Some(default_pair_info());
+
+    let res = init(&mut deps, env, msg).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Initialize token funds
+    let initial_token_amount = 906_122_399_771;
+    deps.querier.terranames_token_querier.balances.insert(
+        MOCK_CONTRACT_ADDR.into(), Uint128::from(initial_token_amount),
+    );
+    let env = mock_env("token_contract", &[]);
+    let res = handle(&mut deps, env, HandleMsg::Receive(Cw20ReceiveMsg {
+        amount: Uint128::from(initial_token_amount),
+        sender: "governor".into(),
+        msg: Some(to_binary(&ReceiveMsg::AcceptInitialTokens { }).unwrap()),
     })).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Set the current number of tokens and stable coints in the terraswap
+    // pool pair.
+    deps.querier.terraswap_querier.pair_1_amount = 93_877_600_229;
+    deps.querier.terraswap_querier.pair_2_amount =  22_141_001_913;
+    deps.querier.terraswap_querier.pair_total_share = 1_234_567_890;
+
+    // Activate the consume stable coin funds endpoint. The pool has funds so
+    // this should use the implied price from the pool.
+    let tax_amount = 6016;
+    let expected_tokens_released = 6_297_850;
+
+    let env = mock_env("user", &[]);
+    let res = handle(&mut deps, env, HandleMsg::ConsumeExcessStable {}).unwrap();
     assert_eq!(res.messages.len(), 2);
 
     // Expect first message to increase the allowance for the terraswap pair to
@@ -198,7 +295,10 @@ fn accept_funds_releases_tokens() {
 
 #[test]
 fn accept_funds_buys_tokens() {
-    let mut deps = mock_dependencies(20, &[]);
+    // Create contract with balance simulating that the auction has deposited
+    // some funds already.
+    let deposit = 1_491_362;
+    let mut deps = mock_dependencies(20, &coins(deposit, ABC_COIN));
 
     let msg = default_init();
     let env = mock_env("creator", &[]);
@@ -208,15 +308,12 @@ fn accept_funds_buys_tokens() {
     let res = init(&mut deps, env, msg).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    // Let the collector accept funds from the auction
-    let deposit = 1_491_362;
-    let tax_amount = 6016;
-
-    let env = mock_env("auction_contract", &coins(deposit, ABC_COIN));
-    let res = handle(&mut deps, env, HandleMsg::AcceptFunds(AcceptFunds {
-        source_addr: "source".into(),
-    })).unwrap();
+    // Activate the consume stable coin funds endpoint
+    let env = mock_env("user", &coins(deposit, ABC_COIN));
+    let res = handle(&mut deps, env, HandleMsg::ConsumeExcessStable {}).unwrap();
     assert_eq!(res.messages.len(), 1);
+
+    let tax_amount = 6016;
 
     // There are no initially deposited tokens in the contract so expect
     // the first message to swap stable denom to tokens
@@ -250,8 +347,11 @@ fn accept_funds_buys_tokens() {
 }
 
 #[test]
-fn accept_funds_buys_tokens() {
-    let mut deps = mock_dependencies(20, &[]);
+fn accept_funds_releases_remaining_tokens_then_buys_tokens() {
+    // Create contract with balance simulating that the auction has deposited
+    // some funds already.
+    let deposit = 48_799_125;
+    let mut deps = mock_dependencies(20, &coins(deposit, ABC_COIN));
 
     let msg = default_init();
     let env = mock_env("creator", &[]);
@@ -261,23 +361,91 @@ fn accept_funds_buys_tokens() {
     let res = init(&mut deps, env, msg).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    // Let the collector accept funds from the auction
-    let deposit = 1_491_362;
-    let tax_amount = 6016;
-
-    let env = mock_env("auction_contract", &coins(deposit, ABC_COIN));
-    let res = handle(&mut deps, env, HandleMsg::AcceptFunds(AcceptFunds {
-        source_addr: "source".into(),
+    // Initialize token funds
+    let initial_token_amount: u128 = 10_000_000;
+    deps.querier.terranames_token_querier.balances.insert(
+        MOCK_CONTRACT_ADDR.into(), Uint128::from(initial_token_amount),
+    );
+    let env = mock_env("token_contract", &[]);
+    let res = handle(&mut deps, env, HandleMsg::Receive(Cw20ReceiveMsg {
+        amount: Uint128::from(initial_token_amount),
+        sender: "governor".into(),
+        msg: Some(to_binary(&ReceiveMsg::AcceptInitialTokens { }).unwrap()),
     })).unwrap();
-    assert_eq!(res.messages.len(), 1);
+    assert_eq!(res.messages.len(), 0);
 
-    // There are no initially deposited tokens in the contract so expect
-    // the first message to swap stable denom to tokens
-    let swap_message = &res.messages[0];
+    // Set the current number of tokens and stable coints in the terraswap
+    // pool pair.
+    deps.querier.terraswap_querier.pair_1_amount = 999_990_000_000;
+    deps.querier.terraswap_querier.pair_2_amount = 3_205_117_988_431;
+    deps.querier.terraswap_querier.pair_total_share = 1_234_567_890;
+
+    let liquidity_net_amount = 32_051_500;
+    let liquidity_tax_amount = 129_808;
+    let swap_amount = deposit - liquidity_net_amount - liquidity_tax_amount;
+    let swap_tax_amount = 67_031;
+
+    // Activate the consume stable coin funds endpoint
+    let env = mock_env("user", &coins(deposit, ABC_COIN));
+    let res = handle(&mut deps, env, HandleMsg::ConsumeExcessStable {}).unwrap();
+    assert_eq!(res.messages.len(), 3);
+
+    // Expect first message to increase the allowance for the terraswap pair to
+    // be able to withdraw tokens when providing liquidity.
+    let increase_allowance_message = &res.messages[0];
+    match increase_allowance_message {
+        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+            assert_eq!(contract_addr.as_str(), "token_contract");
+            assert_eq!(send, &[]);
+
+            match from_binary(&msg).unwrap() {
+                Cw20HandleMsg::IncreaseAllowance { spender, amount, expires } => {
+                    assert_eq!(spender.as_str(), "token_stable_pair");
+                    assert_eq!(amount.u128(), initial_token_amount);
+                    assert_eq!(expires, None);
+                },
+                _ => panic!("Unexpected message: {:?}", msg),
+            }
+        },
+        _ => panic!("Unexpected message type: {:?}", increase_allowance_message),
+    }
+
+    // Expect second message to provide liquidity to the terraswap pair.
+    let provide_liquidity_message = &res.messages[1];
+    match provide_liquidity_message {
+        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+            assert_eq!(contract_addr.as_str(), "token_stable_pair");
+            assert_eq!(send, &coins(liquidity_net_amount, ABC_COIN));
+
+            match from_binary(&msg).unwrap() {
+                PairHandleMsg::ProvideLiquidity { assets, slippage_tolerance } => {
+                    assert_eq!(assets[0], Asset {
+                        info: AssetInfo::Token {
+                            contract_addr: "token_contract".into(),
+                        },
+                        amount: Uint128::from(initial_token_amount),
+                    });
+                    assert_eq!(assets[1], Asset {
+                        info: AssetInfo::NativeToken {
+                            denom: ABC_COIN.into(),
+                        },
+                        amount: Uint128::from(liquidity_net_amount),
+                    });
+                    assert_eq!(slippage_tolerance, None);
+                },
+                _ => panic!("Unexpected message: {:?}", msg),
+            }
+        },
+        _ => panic!("Unexpected message type: {:?}", provide_liquidity_message),
+    }
+
+    // There are no tokens left in the contract so expect the last message to
+    // swap stable denom to tokens
+    let swap_message = &res.messages[2];
     match swap_message {
         CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
             assert_eq!(contract_addr.as_str(), "token_stable_pair");
-            assert_eq!(send, &coins(deposit - tax_amount, ABC_COIN));
+            assert_eq!(send, &coins(swap_amount - swap_tax_amount, ABC_COIN));
 
             match from_binary(&msg).unwrap() {
                 PairHandleMsg::Swap { offer_asset, to, belief_price, max_spread } => {
@@ -285,7 +453,7 @@ fn accept_funds_buys_tokens() {
                         info: AssetInfo::NativeToken {
                             denom: ABC_COIN.into(),
                         },
-                        amount: Uint128::from(deposit - tax_amount),
+                        amount: Uint128::from(swap_amount - swap_tax_amount),
                     });
                     assert_eq!(to, None);
                     assert_eq!(belief_price, None);

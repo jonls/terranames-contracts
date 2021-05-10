@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use cw20::Cw20ReceiveMsg;
 
-use crate::collector::AcceptFunds;
-
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct InitMsg {
@@ -29,8 +27,8 @@ pub enum QueryMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HandleMsg {
-    AcceptFunds(AcceptFunds),
-    BurnExcess {},
+    ConsumeExcessStable {},
+    ConsumeExcessTokens {},
     Receive(Cw20ReceiveMsg),
 }
 

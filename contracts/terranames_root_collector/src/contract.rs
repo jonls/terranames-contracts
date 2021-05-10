@@ -1,12 +1,10 @@
 use cosmwasm_std::{
     from_binary, log, to_binary, Api, Binary, Coin, CosmosMsg, Decimal, Env,
-    Extern, HandleResponse, HandleResult, HumanAddr, InitResponse, InitResult,
-    Querier, QueryRequest, StdError, StdResult, Storage, Uint128, WasmMsg,
-    WasmQuery,
+    Extern, HandleResponse, HandleResult, InitResponse, InitResult, Querier,
+    QueryRequest, StdError, StdResult, Storage, Uint128, WasmMsg, WasmQuery,
 };
 
 use cw20::{Cw20Contract, Cw20HandleMsg, Cw20ReceiveMsg};
-use terranames::collector::AcceptFunds;
 use terranames::root_collector::{
     ConfigResponse, HandleMsg, InitMsg, ReceiveMsg, StateResponse, QueryMsg,
 };
@@ -22,16 +20,6 @@ use terraswap::querier::query_pair_info;
 use crate::state::{
     read_config, read_state, store_config, store_state, Config, State,
 };
-
-/// Return the funds of type denom attached in the request.
-fn get_sent_funds(env: &Env, denom: &str) -> Uint128 {
-    env.message
-        .sent_funds
-        .iter()
-        .find(|c| c.denom == denom)
-        .map(|c| c.amount)
-        .unwrap_or_else(Uint128::zero)
-}
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
@@ -81,11 +69,11 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     msg: HandleMsg,
 ) -> HandleResult {
     match msg {
-        HandleMsg::AcceptFunds(AcceptFunds { source_addr }) => {
-            handle_accept_funds(deps, env, source_addr)
+        HandleMsg::ConsumeExcessStable {} => {
+            handle_consume_excess_stable(deps, env)
         },
-        HandleMsg::BurnExcess {} => {
-            handle_burn_excess(deps, env)
+        HandleMsg::ConsumeExcessTokens {} => {
+            handle_consume_excess_tokens(deps, env)
         },
         HandleMsg::Receive(msg) => {
             handle_receive(deps, env, msg)
@@ -93,19 +81,20 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     }
 }
 
-fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
+fn handle_consume_excess_stable<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    source_addr: HumanAddr,
 ) -> HandleResult {
     let config = read_config(&deps.storage)?;
     let mut state = read_state(&deps.storage)?;
 
-    let msg_deposit = get_sent_funds(&env, &config.stable_denom);
-    if msg_deposit.is_zero() {
-        return Err(StdError::generic_err(format!(
-            "Missing funds: {}", config.stable_denom,
-        )));
+    // Query for current stable coin balance
+    let stable_balance = deps.querier.query_balance(
+        env.contract.address.clone(),
+        &config.stable_denom,
+    )?.amount;
+    if stable_balance.is_zero() {
+        return Err(StdError::generic_err("No stable coin funds exist to consume"));
     }
 
     // Query for the current token balance
@@ -118,7 +107,7 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
 
     let mut messages = vec![];
 
-    let mut stable_to_send = msg_deposit;
+    let mut stable_to_send = stable_balance;
     let tokens_to_release_left = std::cmp::min(token_balance, state.initial_token_pool);
     if !tokens_to_release_left.is_zero() {
         // Query for the swap pool exchange rate
@@ -263,14 +252,14 @@ fn handle_accept_funds<S: Storage, A: Api, Q: Querier>(
     Ok(HandleResponse {
         messages,
         log: vec![
-            log("action", "accept_funds"),
+            log("action", "consume_excess_stable"),
             log("initial_token_pool", state.initial_token_pool),
         ],
         data: None,
     })
 }
 
-fn handle_burn_excess<S: Storage, A: Api, Q: Querier>(
+fn handle_consume_excess_tokens<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
 ) -> HandleResult {
@@ -289,7 +278,7 @@ fn handle_burn_excess<S: Storage, A: Api, Q: Querier>(
         token_balance.u128().saturating_sub(state.initial_token_pool.u128())
     );
     if tokens_to_burn.is_zero() {
-        return Err(StdError::generic_err("No tokens to burn"));
+        return Err(StdError::generic_err("No tokens exist to consume"));
     }
 
     Ok(HandleResponse {
@@ -307,7 +296,7 @@ fn handle_burn_excess<S: Storage, A: Api, Q: Querier>(
             )
         ],
         log: vec![
-            log("action", "burn_excess"),
+            log("action", "consume_excess_tokens"),
             log("tokens", token_balance),
         ],
         data: None,

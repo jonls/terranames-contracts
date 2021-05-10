@@ -1,16 +1,13 @@
 use cosmwasm_std::{
     log, to_binary, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg,
     Env, Extern, HandleResponse, HandleResult, HumanAddr, InitResponse,
-    InitResult, Querier, StdError, StdResult, Storage, Uint128, WasmMsg,
+    InitResult, Querier, StdError, StdResult, Storage, Uint128,
 };
 
 use terranames::auction::{
     deposit_from_blocks_ceil, deposit_from_blocks_floor, ConfigResponse,
     AllNameStatesResponse, HandleMsg, InitMsg, NameStateItem, NameStateResponse,
     QueryMsg,
-};
-use terranames::collector::{
-    AcceptFunds, HandleMsg as CollectorHandleMsg,
 };
 use terranames::terra::deduct_coin_tax;
 
@@ -30,6 +27,11 @@ fn get_sent_funds(env: &Env, denom: &str) -> Uint128 {
 }
 
 /// Create message for refund deposits
+///
+/// Idea: Store refunds in this contract instead of sending them back
+/// immediately, in order to avoid repeated tax on transfers. Instead users can
+/// use the refund balance in calls needing funds. Also need a separate call to
+/// actually send the refund balance back.
 fn refund_deposit_msg<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: &Env,
@@ -54,23 +56,23 @@ fn refund_deposit_msg<S: Storage, A: Api, Q: Querier>(
     ))
 }
 
-/// Create message for sending deposits to fund
+/// Create message for sending deposits to collector
+///
+/// Currently just sends funds to the collector. In the future this could use
+/// a WasmMsg to trigger some kind of accounting in the collector and/or giving
+/// some priviledge to the sender (e.g. reward tokens or something like that).
 fn send_to_collector_msg<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: &Env,
     config: &Config,
-    source_addr: &HumanAddr,
+    _source_addr: &HumanAddr,
     amount: Uint128,
 ) -> StdResult<CosmosMsg> {
-    Ok(CosmosMsg::Wasm(
-        WasmMsg::Execute {
-            contract_addr: deps.api.human_address(&config.collector_addr)?,
-            msg: to_binary(
-                &CollectorHandleMsg::AcceptFunds(AcceptFunds {
-                    source_addr: source_addr.clone(),
-                }),
-            )?,
-            send: vec![
+    Ok(CosmosMsg::Bank(
+        BankMsg::Send {
+            from_address: env.contract.address.clone(),
+            to_address: deps.api.human_address(&config.collector_addr)?,
+            amount: vec![
                 deduct_coin_tax(
                     &deps,
                     Coin {
@@ -174,11 +176,6 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
     transition_reference_block: u64,
 ) -> HandleResult {
     let sender_canonical = deps.api.canonical_address(&env.message.sender)?;
-    // TODO rethink how this works when the bid delay is over but there are no
-    // counter bids? Currently this means that the owner cannot lock in
-    // ownership for another bid delay period because they cannot even bump the
-    // bid up slightly to trigger a new begin_block (maybe they can with rate
-    // change?).
     if sender_canonical == name_state.owner {
         return Err(StdError::generic_err("Cannot bid as current owner"));
     }

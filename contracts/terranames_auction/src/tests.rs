@@ -1,15 +1,12 @@
 use cosmwasm_std::{
-    coins, from_binary, Api, CosmosMsg, Env, Extern, HandleResult, HumanAddr,
-    Querier, Storage, Uint128, WasmMsg,
+    coins, from_binary, Api, BankMsg, CosmosMsg, Env, Extern, HandleResult,
+    HumanAddr, Querier, Storage, Uint128,
 };
-use cosmwasm_std::testing::mock_env;
+use cosmwasm_std::testing::{mock_env, MOCK_CONTRACT_ADDR};
 
 use terranames::auction::{
     AllNameStatesResponse, ConfigResponse, HandleMsg, InitMsg,
     NameStateResponse, QueryMsg,
-};
-use terranames::collector::{
-    AcceptFunds, HandleMsg as CollectorHandleMsg,
 };
 
 use crate::contract::{handle, init, query};
@@ -326,19 +323,13 @@ fn initial_non_zero_bid() {
     let tax_amount = 4962;
 
     // Assert funds message sent to collector
+    // TODO create a similar assert for the refund message in tests below!!
     let send_to_collector_msg = &res.messages[0];
     match send_to_collector_msg {
-        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
-            assert_eq!(contract_addr.as_str(), "collector");
-            assert_eq!(send, &coins(deposit_amount - tax_amount, ABC_COIN));
-
-            let msg: CollectorHandleMsg = from_binary(&msg).unwrap();
-            match msg {
-                CollectorHandleMsg::AcceptFunds(AcceptFunds { source_addr }) => {
-                    assert_eq!(source_addr.as_str(), "bidder");
-                },
-                _ => panic!("Unexpected message: {:?}", msg),
-            }
+        CosmosMsg::Bank(BankMsg::Send { from_address, to_address, amount }) => {
+            assert_eq!(from_address.as_str(), MOCK_CONTRACT_ADDR);
+            assert_eq!(to_address.as_str(), "collector");
+            assert_eq!(amount, &coins(deposit_amount - tax_amount, ABC_COIN));
         },
         _ => panic!("Unexpected message type: {:?}", send_to_collector_msg),
     }
@@ -829,16 +820,10 @@ fn fund_name() {
     // Assert funds message sent to collector
     let send_to_collector_msg = &res.messages[0];
     match send_to_collector_msg {
-        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
-            assert_eq!(contract_addr.as_str(), "collector");
-            assert_eq!(send, &coins(deposit_amount - tax_amount, ABC_COIN));
-
-            let msg: CollectorHandleMsg = from_binary(&msg).unwrap();
-            match msg {
-                CollectorHandleMsg::AcceptFunds(AcceptFunds { source_addr }) => {
-                    assert_eq!(source_addr.as_str(), "funder");
-                },
-            }
+        CosmosMsg::Bank(BankMsg::Send { from_address, to_address, amount }) => {
+            assert_eq!(from_address.as_str(), MOCK_CONTRACT_ADDR);
+            assert_eq!(to_address.as_str(), "collector");
+            assert_eq!(amount, &coins(deposit_amount - tax_amount, ABC_COIN));
         },
         _ => panic!("Unexpected message type"),
     }
