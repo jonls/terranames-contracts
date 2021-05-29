@@ -257,6 +257,9 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
         );
     }
 
+    // TODO query for the contract balance instead of using msg_deposit
+    // in order to drain dust etc. out of the contract.
+
     // Send excess deposit to collector
     let excess_deposit = (msg_deposit - deposit_left)?;
     messages.push(
