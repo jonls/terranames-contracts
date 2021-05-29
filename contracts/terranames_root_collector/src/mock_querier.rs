@@ -1,6 +1,6 @@
 use cosmwasm_std::{
-    from_slice, Coin, Extern, HumanAddr, Querier, QuerierResult,
-    QueryRequest, SystemError,
+    from_slice, Addr, Coin, OwnedDeps, Querier, QuerierResult, QueryRequest,
+    SystemError, SystemResult,
 };
 use cosmwasm_std::testing::{
     MockApi, MockQuerier as CosmMockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
@@ -11,16 +11,15 @@ use terranames::testing::terraswap::TerraswapQuerier;
 use terra_cosmwasm::TerraQueryWrapper;
 
 pub fn mock_dependencies(
-    canonical_length: usize,
     contract_balance: &[Coin],
-) -> Extern<MockStorage, MockApi, MockQuerier> {
-    let contract_addr = HumanAddr::from(MOCK_CONTRACT_ADDR);
+) -> OwnedDeps<MockStorage, MockApi, MockQuerier> {
+    let contract_addr = MOCK_CONTRACT_ADDR;
     let querier: MockQuerier = MockQuerier::new()
             .with_base_querier(CosmMockQuerier::new(&[(&contract_addr, contract_balance)]));
 
-    Extern {
+    OwnedDeps {
         storage: MockStorage::default(),
-        api: MockApi::new(canonical_length),
+        api: MockApi::default(),
         querier: querier,
     }
 }
@@ -36,8 +35,8 @@ impl MockQuerier {
     pub fn new() -> MockQuerier {
         MockQuerier {
             tax_querier: TaxQuerier::default(),
-            terraswap_querier: TerraswapQuerier::new("terraswap_factory".into()),
-            terranames_token_querier: Cw20Querier::new("token_contract".into()),
+            terraswap_querier: TerraswapQuerier::new(Addr::unchecked("terraswap_factory")),
+            terranames_token_querier: Cw20Querier::new(Addr::unchecked("token_contract")),
             base_querier: CosmMockQuerier::new(&[]),
         }
     }
@@ -69,7 +68,7 @@ impl Querier for MockQuerier {
         let request: QueryRequest<TerraQueryWrapper> = match from_slice(bin_request) {
             Ok(v) => v,
             Err(e) => {
-                return Err(SystemError::InvalidRequest {
+                return SystemResult::Err(SystemError::InvalidRequest {
                     error: format!("Parsing query request: {}", e),
                     request: bin_request.into(),
                 });

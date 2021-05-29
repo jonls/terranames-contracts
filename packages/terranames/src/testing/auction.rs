@@ -1,5 +1,5 @@
 use cosmwasm_std::{
-    from_binary, to_binary, QuerierResult, QueryRequest, SystemError, WasmQuery,
+    from_binary, to_binary, CustomQuery, QuerierResult, QueryRequest, SystemError, WasmQuery,
 };
 
 use crate::auction::{NameStateResponse, QueryMsg};
@@ -19,17 +19,17 @@ impl AuctionQuerier {
 }
 
 impl AuctionQuerier {
-    pub fn handle_query<T>(&self, request: &QueryRequest<T>) -> Option<QuerierResult> {
+    pub fn handle_query<T: CustomQuery>(&self, request: &QueryRequest<T>) -> Option<QuerierResult> {
         let res = match &request {
             QueryRequest::Wasm(WasmQuery::Smart { msg, .. }) => {
                 match from_binary(&msg).unwrap() {
                     QueryMsg::GetNameState { .. } => {
                         match &self.response {
-                            Some(response) => Ok(to_binary(response)),
+                            Some(response) => Ok(to_binary(response).into()),
                             None => Err(SystemError::InvalidRequest {
                                 error: "Mock auction querier does not contain a response".to_string(),
                                 request: msg.as_slice().into(),
-                            })
+                            }),
                         }
 
                     },
@@ -38,6 +38,6 @@ impl AuctionQuerier {
             },
             _ => return None,
         };
-        Some(res)
+        Some(res.into())
     }
 }

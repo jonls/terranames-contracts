@@ -1,6 +1,6 @@
 use cosmwasm_std::{
-    from_slice, Coin, Empty, Extern, HumanAddr, Querier, QuerierResult,
-    QueryRequest, SystemError,
+    from_slice, Coin, Empty, OwnedDeps, Querier, QuerierResult,
+    QueryRequest, SystemError, SystemResult,
 };
 use cosmwasm_std::testing::{
     MockApi, MockQuerier as CosmMockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
@@ -9,16 +9,15 @@ use cosmwasm_std::testing::{
 use terranames::testing::auction::AuctionQuerier;
 
 pub fn mock_dependencies(
-    canonical_length: usize,
     contract_balance: &[Coin],
-) -> Extern<MockStorage, MockApi, MockQuerier> {
-    let contract_addr = HumanAddr::from(MOCK_CONTRACT_ADDR);
+) -> OwnedDeps<MockStorage, MockApi, MockQuerier> {
+    let contract_addr = MOCK_CONTRACT_ADDR;
     let querier: MockQuerier = MockQuerier::new()
             .with_base_querier(CosmMockQuerier::new(&[(&contract_addr, contract_balance)]));
 
-    Extern {
+    OwnedDeps {
         storage: MockStorage::default(),
-        api: MockApi::new(canonical_length),
+        api: MockApi::default(),
         querier: querier,
     }
 }
@@ -59,7 +58,7 @@ impl Querier for MockQuerier {
         let request: QueryRequest<Empty> = match from_slice(bin_request) {
             Ok(v) => v,
             Err(e) => {
-                return Err(SystemError::InvalidRequest {
+                return SystemResult::Err(SystemError::InvalidRequest {
                     error: format!("Parsing query request: {}", e),
                     request: bin_request.into(),
                 });

@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::{CanonicalAddr, Order, StdError, StdResult, Storage, Uint128};
+use cosmwasm_std::{Addr, Order, StdError, StdResult, Storage, Uint128};
 use cosmwasm_storage::{
     bucket, bucket_read, singleton, singleton_read,
 };
@@ -25,7 +25,7 @@ fn calc_range_start_str(start_after: Option<&str>) -> Option<Vec<u8>> {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Config {
     /// Collector of funds
-    pub collector_addr: CanonicalAddr,
+    pub collector_addr: Addr,
     /// Stablecoin denomination
     pub stable_denom: String,
     /// Minimum number of blocks to allow bidding for
@@ -40,13 +40,13 @@ pub struct Config {
     pub bid_delay_blocks: u64,
 }
 
-pub fn read_config<S: Storage>(storage: &S) -> StdResult<Config> {
+pub fn read_config(storage: &dyn Storage) -> StdResult<Config> {
     singleton_read(storage, CONFIG_KEY).load()
 }
 
 #[must_use]
-pub fn store_config<S: Storage>(
-    storage: &mut S,
+pub fn store_config(
+    storage: &mut dyn Storage,
     config: &Config,
 ) -> StdResult<()> {
     singleton(storage, CONFIG_KEY).save(config)
@@ -55,9 +55,9 @@ pub fn store_config<S: Storage>(
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct NameState {
     /// Owner of the name
-    pub owner: CanonicalAddr,
+    pub owner: Addr,
     /// Controller of the name
-    pub controller: CanonicalAddr,
+    pub controller: Option<Addr>,
     /// Block height from where transition delay is calculated from
     pub transition_reference_block: u64,
 
@@ -69,7 +69,7 @@ pub struct NameState {
     pub begin_deposit: Uint128,
 
     /// Previous owner
-    pub previous_owner: CanonicalAddr,
+    pub previous_owner: Option<Addr>,
     /// Previous transition reference block
     pub previous_transition_reference_block: u64,
 }
@@ -190,16 +190,16 @@ impl NameState {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub enum OwnerStatus {
     CounterDelay {
-        name_owner: CanonicalAddr,
-        bid_owner: CanonicalAddr,
+        name_owner: Option<Addr>,
+        bid_owner: Addr,
         transition_reference_block: u64,
     },
     TransitionDelay {
-        owner: CanonicalAddr,
+        owner: Addr,
         transition_reference_block: u64,
     },
     Valid {
-        owner: CanonicalAddr,
+        owner: Addr,
         transition_reference_block: u64,
     },
     Expired {
@@ -209,7 +209,7 @@ pub enum OwnerStatus {
 }
 
 impl OwnerStatus {
-    pub fn can_set_rate(&self, sender: &CanonicalAddr) -> bool {
+    pub fn can_set_rate(&self, sender: &Addr) -> bool {
         match self {
             OwnerStatus::Valid { owner, .. } |
             OwnerStatus::TransitionDelay { owner, .. } => sender == owner,
@@ -217,52 +217,52 @@ impl OwnerStatus {
         }
     }
 
-    pub fn can_transfer_name_owner(&self, sender: &CanonicalAddr) -> bool {
+    pub fn can_transfer_name_owner(&self, sender: &Addr) -> bool {
         match self {
             OwnerStatus::Valid { owner, .. } |
-            OwnerStatus::CounterDelay { name_owner: owner, .. } |
+            OwnerStatus::CounterDelay { name_owner: Some(owner), .. } |
             OwnerStatus::TransitionDelay { owner, .. } => sender == owner,
             _ => false,
         }
     }
 
-    pub fn can_transfer_bid_owner(&self, sender: &CanonicalAddr) -> bool {
+    pub fn can_transfer_bid_owner(&self, sender: &Addr) -> bool {
         match self {
             OwnerStatus::CounterDelay { bid_owner, .. } => sender == bid_owner,
             _ => false,
         }
     }
 
-    pub fn can_set_controller(&self, sender: &CanonicalAddr) -> bool {
+    pub fn can_set_controller(&self, sender: &Addr) -> bool {
         match self {
             OwnerStatus::Valid { owner, .. } |
-            OwnerStatus::CounterDelay { name_owner: owner, .. } |
+            OwnerStatus::CounterDelay { name_owner: Some(owner), .. } |
             OwnerStatus::TransitionDelay { owner, .. } => sender == owner,
             _ => false,
         }
     }
 }
 
-pub fn read_name_state<S: Storage>(
-    storage: &S,
+pub fn read_name_state(
+    storage: &dyn Storage,
     name: &str,
 ) -> StdResult<NameState> {
-    bucket_read(NAME_STATE_PREFIX, storage).load(name.as_bytes())
+    bucket_read(storage, NAME_STATE_PREFIX).load(name.as_bytes())
 }
 
-pub fn read_option_name_state<S: Storage>(
-    storage: &S,
+pub fn read_option_name_state(
+    storage: &dyn Storage,
     name: &str,
 ) -> StdResult<Option<NameState>> {
-    bucket_read(NAME_STATE_PREFIX, storage).may_load(name.as_bytes())
+    bucket_read(storage, NAME_STATE_PREFIX).may_load(name.as_bytes())
 }
 
-pub fn collect_name_states<S: Storage>(
-    storage: &S,
+pub fn collect_name_states(
+    storage: &dyn Storage,
     start_after: Option<&str>,
     limit: Option<u32>,
 ) -> StdResult<Vec<(String, NameState)>> {
-    let bucket = bucket_read(NAME_STATE_PREFIX, storage);
+    let bucket = bucket_read(storage, NAME_STATE_PREFIX);
     let start = calc_range_start_str(start_after);
     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
     bucket.range(start.as_deref(), None, Order::Ascending)
@@ -277,10 +277,10 @@ pub fn collect_name_states<S: Storage>(
 }
 
 #[must_use]
-pub fn store_name_state<S: Storage>(
-    storage: &mut S,
+pub fn store_name_state(
+    storage: &mut dyn Storage,
     name: &str,
     name_info: &NameState,
 ) -> StdResult<()> {
-    bucket(NAME_STATE_PREFIX, storage).save(name.as_bytes(), name_info)
+    bucket(storage, NAME_STATE_PREFIX).save(name.as_bytes(), name_info)
 }

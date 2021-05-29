@@ -1,23 +1,24 @@
 use cosmwasm_std::{
-    coins, from_binary, Api, BankMsg, CosmosMsg, Env, Extern, HandleResult,
-    HumanAddr, Querier, Storage, Uint128,
+    coins, from_binary, Addr, BankMsg, CosmosMsg, Deps, DepsMut, Env, Response,
+    Uint128,
 };
-use cosmwasm_std::testing::{mock_env, MOCK_CONTRACT_ADDR};
+use cosmwasm_std::testing::{mock_env, mock_info};
 
 use terranames::auction::{
-    AllNameStatesResponse, ConfigResponse, HandleMsg, InitMsg,
+    AllNameStatesResponse, ConfigResponse, ExecuteMsg, InstantiateMsg,
     NameStateResponse, QueryMsg,
 };
 
-use crate::contract::{handle, init, query};
+use crate::contract::{execute, instantiate, query};
+use crate::errors::ContractError;
 use crate::mock_querier::mock_dependencies;
 
 static ABC_COIN: &str = "uabc";
 static NOT_ABC_COIN: &str = "uNOT";
 
-fn default_init() -> InitMsg {
-    InitMsg {
-        collector_addr: HumanAddr("collector".to_string()),
+fn default_init() -> InstantiateMsg {
+    InstantiateMsg {
+        collector_addr: "collector".into(),
         stable_denom: ABC_COIN.to_string(),
         min_lease_blocks: 2254114, // ~6 months
         max_lease_blocks: 22541140, // ~5 years
@@ -61,14 +62,11 @@ impl<'a> Bid<'a> {
         }
     }
 
-    fn handle<S: Storage, A: Api, Q: Querier>(
-        self,
-        deps: &mut Extern<S, A, Q>,
-    ) -> HandleResult {
-        let mut env = mock_env(self.bidder, &coins(self.deposit, ABC_COIN));
-        env.block.height = self.block_height;
+    fn execute(self, deps: DepsMut) -> Result<Response, ContractError> {
+        let info = mock_info(self.bidder, &coins(self.deposit, ABC_COIN));
+        let env = mock_env().at_block_height(self.block_height);
 
-        handle(deps, env, HandleMsg::BidName {
+        execute(deps, env, info, ExecuteMsg::BidName {
             name: self.name.to_string(),
             rate: Uint128::from(self.rate),
         })
@@ -207,8 +205,9 @@ impl<'a> NameStateAsserter<'a> {
     }
 
     /// Assert name state properties
-    fn assert<S: Storage, A: Api, Q: Querier>(self, deps: &Extern<S, A, Q>) {
-        let res = query(deps, QueryMsg::GetNameState {
+    fn assert(self, deps: Deps) {
+        let env = mock_env();
+        let res = query(deps, env, QueryMsg::GetNameState {
             name: self.name.to_string(),
         }).unwrap();
         let name_state: NameStateResponse = from_binary(&res).unwrap();
@@ -217,7 +216,7 @@ impl<'a> NameStateAsserter<'a> {
             assert_eq!(name_state.owner.as_str(), owner, "owner does not match");
         }
         if let Some(controller) = self.controller {
-            assert_eq!(name_state.controller, controller.map(|c| c.into()), "controller does not match");
+            assert_eq!(name_state.controller, controller.map(Addr::unchecked), "controller does not match");
         }
         if let Some(rate) = self.rate {
             assert_eq!(name_state.rate.u128(), rate, "rate does not match");
@@ -229,7 +228,7 @@ impl<'a> NameStateAsserter<'a> {
             assert_eq!(name_state.begin_deposit.u128(), begin_deposit, "begin_deposit does not match");
         }
         if let Some(previous_owner) = self.previous_owner {
-            assert_eq!(name_state.previous_owner, previous_owner.map(|c| c.into()), "previous_owner does not match");
+            assert_eq!(name_state.previous_owner, previous_owner.map(Addr::unchecked), "previous_owner does not match");
         }
         if let Some(counter_delay_end) = self.counter_delay_end {
             assert_eq!(name_state.counter_delay_end, counter_delay_end, "counter_delay_end does not match");
@@ -248,17 +247,19 @@ impl<'a> NameStateAsserter<'a> {
 
 #[test]
 fn proper_initialization() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
     // we can just call .unwrap() to assert this was a success
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     // it worked, let's query the state
-    let res = query(&deps, QueryMsg::Config {}).unwrap();
+    let env = mock_env();
+    let res = query(deps.as_ref(), env, QueryMsg::Config {}).unwrap();
     let config: ConfigResponse = from_binary(&res).unwrap();
     assert_eq!(config.collector_addr.as_str(), "collector");
     assert_eq!(config.stable_denom.as_str(), ABC_COIN);
@@ -271,17 +272,18 @@ fn proper_initialization() {
 
 #[test]
 fn initial_zero_bid() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
     let res = Bid::on("example", "bidder", bid_block)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 0);
 
@@ -295,17 +297,18 @@ fn initial_zero_bid() {
         .transition_delay_end(1234)
         .bid_delay_end(1234)
         .expire_block(None)
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn initial_non_zero_bid() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -313,7 +316,7 @@ fn initial_non_zero_bid() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(194_513)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -326,8 +329,7 @@ fn initial_non_zero_bid() {
     // TODO create a similar assert for the refund message in tests below!!
     let send_to_collector_msg = &res.messages[0];
     match send_to_collector_msg {
-        CosmosMsg::Bank(BankMsg::Send { from_address, to_address, amount }) => {
-            assert_eq!(from_address.as_str(), MOCK_CONTRACT_ADDR);
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
             assert_eq!(to_address.as_str(), "collector");
             assert_eq!(amount, &coins(deposit_amount - tax_amount, ABC_COIN));
         },
@@ -344,17 +346,18 @@ fn initial_non_zero_bid() {
         .transition_delay_end(1234)
         .bid_delay_end(1234 + 86400 + 2254114)
         .expire_block(Some(1234 + 6323484))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn initial_bid_outside_of_allowed_block_range() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -364,39 +367,40 @@ fn initial_bid_outside_of_allowed_block_range() {
     let res = Bid::on("example_1", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(545_669)
-        .handle(&mut deps);
+        .execute(deps.as_mut());
     assert_eq!(res.is_err(), true);
 
     // Lower rate is successful
     Bid::on("example_1", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(545_668)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
 
     // Low rate results in too many blocks leased
     let res = Bid::on("example_2", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(54566)
-        .handle(&mut deps);
+        .execute(deps.as_mut());
     assert_eq!(res.is_err(), true);
 
     // Higher rate is successful
     Bid::on("example_2", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(54567)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
 }
 
 #[test]
 fn bid_on_existing_name_as_owner() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block: u64 = 1234;
@@ -404,7 +408,7 @@ fn bid_on_existing_name_as_owner() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -414,7 +418,7 @@ fn bid_on_existing_name_as_owner() {
     let res = Bid::on("example", "bidder_1", bid_2_block)
         .deposit(deposit_amount)
         .rate(246)
-        .handle(&mut deps);
+        .execute(deps.as_mut());
     assert_eq!(res.is_err(), true);
 
     // Bid on the name as the current owner after expiry. This is allowed.
@@ -423,24 +427,25 @@ fn bid_on_existing_name_as_owner() {
     let res = Bid::on("example", "bidder_1", bid_2_block)
         .deposit(deposit_amount)
         .rate(246)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 }
 
 #[test]
 fn bid_on_existing_zero_rate_name_in_counter_delay() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block: u64 = 1234;
     let res = Bid::on("example", "bidder_1", bid_1_block)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 0);
 
@@ -451,7 +456,7 @@ fn bid_on_existing_zero_rate_name_in_counter_delay() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -465,22 +470,23 @@ fn bid_on_existing_zero_rate_name_in_counter_delay() {
         .transition_delay_end(bid_2_block + 86400 + 259200)
         .bid_delay_end(bid_2_block + 86400 + 2254114)
         .expire_block(Some(bid_2_block + 8130081))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn bid_on_existing_zero_rate_name_after_counter_delay() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block: u64 = 1234;
     let res = Bid::on("example", "bidder_1", bid_1_block)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 0);
 
@@ -491,7 +497,7 @@ fn bid_on_existing_zero_rate_name_after_counter_delay() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -505,17 +511,18 @@ fn bid_on_existing_zero_rate_name_after_counter_delay() {
         .transition_delay_end(bid_2_block + 86400 + 259200)
         .bid_delay_end(bid_2_block + 86400 + 2254114)
         .expire_block(Some(bid_2_block + 8130081))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn bid_three_bidders() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     // Initial bid
@@ -524,7 +531,7 @@ fn bid_three_bidders() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -534,7 +541,7 @@ fn bid_three_bidders() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -544,7 +551,7 @@ fn bid_three_bidders() {
     let res = Bid::on("example", "bidder_3", bid_3_block)
         .deposit(deposit_amount)
         .rate(125)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -558,19 +565,20 @@ fn bid_three_bidders() {
         .transition_delay_end(bid_3_block + 86400 + 259200)
         .bid_delay_end(bid_3_block + 86400 + 2254114)
         .expire_block(Some(bid_3_block + 8000000))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 // Bid by A, starts ownership. Then bid by B, then by C, then counter bid by
 // A. A should continue as owner and this should not trigger a transition.
 #[test]
 fn bid_is_counter_bid_then_countered() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     // Initial bid
@@ -579,7 +587,7 @@ fn bid_is_counter_bid_then_countered() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -589,7 +597,7 @@ fn bid_is_counter_bid_then_countered() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -599,7 +607,7 @@ fn bid_is_counter_bid_then_countered() {
     let res = Bid::on("example", "bidder_3", bid_3_block)
         .deposit(deposit_amount)
         .rate(125)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -609,7 +617,7 @@ fn bid_is_counter_bid_then_countered() {
     let res = Bid::on("example", "bidder_1", bid_4_block)
         .deposit(deposit_amount)
         .rate(200)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -622,18 +630,19 @@ fn bid_is_counter_bid_then_countered() {
         .transition_delay_end(bid_4_block)
         .bid_delay_end(bid_4_block + 86400 + 2254114)
         .expire_block(Some(bid_4_block + 5000000))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 // Bid on expired name.
 #[test]
 fn bid_on_expired_name() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     // Initial bid
@@ -642,7 +651,7 @@ fn bid_on_expired_name() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -652,7 +661,7 @@ fn bid_on_expired_name() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(110)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -667,21 +676,22 @@ fn bid_on_expired_name() {
         .transition_delay_end(bid_1_block + 8130081 + 86400 + 259200)
         .bid_delay_end(bid_2_block + 86400 + 2254114)
         .expire_block(Some(bid_2_block + 9090909))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 // Bid on name that expired during a transition
 #[test]
 fn bid_on_expired_name_in_transition() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     // Change min lease blocks so the name can expire during a transition.
     let mut msg = default_init();
     msg.min_lease_blocks = msg.counter_delay_blocks;
     msg.bid_delay_blocks = 10000;
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     // Initial bid
@@ -690,7 +700,7 @@ fn bid_on_expired_name_in_transition() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -700,14 +710,15 @@ fn bid_on_expired_name_in_transition() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(130)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
     // Request rate change to let it expire during transition
     let set_rate_block = bid_2_block + 86400;
-    let env = mock_env("bidder_2", &[]).at_block_height(set_rate_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
+    let env = mock_env().at_block_height(set_rate_block);
+    let info = mock_info("bidder_2", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
         name: "example".to_string(),
         rate: Uint128::from(10000u64),
     }).unwrap();
@@ -719,7 +730,7 @@ fn bid_on_expired_name_in_transition() {
     let res = Bid::on("example", "bidder_3", bid_3_block)
         .deposit(deposit_amount)
         .rate(125)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -735,64 +746,68 @@ fn bid_on_expired_name_in_transition() {
         .transition_delay_end(bid_3_block + 86400 + 259200)
         .bid_delay_end(bid_3_block + 86400 + 10000)
         .expire_block(Some(bid_3_block + 8000000))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 // TODO More bidding test cases needed here
 
 #[test]
 fn fund_unclaimed_name_fails() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
-    let env = mock_env("funder", &coins(1_000_000, ABC_COIN));
-    let res = handle(&mut deps, env, HandleMsg::FundName {
-        name: "example".to_string(),
-        owner: HumanAddr::from("owner"),
+    let env = mock_env();
+    let info = mock_info("funder", &coins(1_000_000, ABC_COIN));
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::FundName {
+        name: "example".into(),
+        owner: "owner".into(),
     });
     assert_eq!(res.is_err(), true);
 }
 
 #[test]
 fn fund_zero_rate_name_fails() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
     let res = Bid::on("example", "bidder", bid_block)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 0);
 
     // Funding a zero rate name is not possible.
     let fund_block = 5000;
-    let env = mock_env("funder", &coins(1_000_000, ABC_COIN))
-        .at_block_height(fund_block);
-    let res = handle(&mut deps, env, HandleMsg::FundName {
-        name: "example".to_string(),
-        owner: HumanAddr::from("bidder"),
+    let env = mock_env().at_block_height(fund_block);
+    let info = mock_info("funder", &coins(1_000_000, ABC_COIN));
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::FundName {
+        name: "example".into(),
+        owner: "bidder".into(),
     });
     assert_eq!(res.is_err(), true);
 }
 
 #[test]
 fn fund_name() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -800,7 +815,7 @@ fn fund_name() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -809,19 +824,18 @@ fn fund_name() {
     let deposit_amount: u128 = 2_000;
     let tax_amount = 9;
 
-    let env = mock_env("funder", &coins(deposit_amount, ABC_COIN))
-        .at_block_height(fund_block);
-    let res = handle(&mut deps, env, HandleMsg::FundName {
-        name: "example".to_string(),
-        owner: HumanAddr::from("bidder"),
+    let env = mock_env().at_block_height(fund_block);
+    let info = mock_info("funder", &coins(deposit_amount, ABC_COIN));
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::FundName {
+        name: "example".into(),
+        owner: "bidder".into(),
     }).unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Assert funds message sent to collector
     let send_to_collector_msg = &res.messages[0];
     match send_to_collector_msg {
-        CosmosMsg::Bank(BankMsg::Send { from_address, to_address, amount }) => {
-            assert_eq!(from_address.as_str(), MOCK_CONTRACT_ADDR);
+        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
             assert_eq!(to_address.as_str(), "collector");
             assert_eq!(amount, &coins(deposit_amount - tax_amount, ABC_COIN));
         },
@@ -837,17 +851,18 @@ fn fund_name() {
         .transition_delay_end(1234)
         .bid_delay_end(1234 + 86400 + 2254114)
         .expire_block(Some(1234 + 24390243))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn fund_name_fails_due_to_other_bid() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -855,7 +870,7 @@ fn fund_name_fails_due_to_other_bid() {
     let res = Bid::on("example", "bidder_1", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -865,7 +880,7 @@ fn fund_name_fails_due_to_other_bid() {
     let res = Bid::on("example", "bidder_2", bid_block)
         .deposit(deposit_amount)
         .rate(246)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -873,23 +888,24 @@ fn fund_name_fails_due_to_other_bid() {
     // first.
     let fund_block = 1236;
     let deposit_amount: u128 = 1_000;
-    let env = mock_env("funder", &coins(deposit_amount, ABC_COIN))
-        .at_block_height(fund_block);
-    let res = handle(&mut deps, env, HandleMsg::FundName {
-        name: "example".to_string(),
-        owner: HumanAddr::from("bidder_1"),
+    let env = mock_env().at_block_height(fund_block);
+    let info = mock_info("funder", &coins(deposit_amount, ABC_COIN));
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::FundName {
+        name: "example".into(),
+        owner: "bidder_1".into(),
     });
     assert_eq!(res.is_err(), true);
 }
 
 #[test]
 fn fund_name_fails_with_zero_funds() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -897,7 +913,7 @@ fn fund_name_fails_with_zero_funds() {
     let res = Bid::on("example", "bidder_1", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -905,23 +921,24 @@ fn fund_name_fails_with_zero_funds() {
     // coin.
     let fund_block = 1236;
     let deposit_amount: u128 = 1_000;
-    let env = mock_env("funder", &coins(deposit_amount, NOT_ABC_COIN))
-        .at_block_height(fund_block);
-    let res = handle(&mut deps, env, HandleMsg::FundName {
-        name: "example".to_string(),
-        owner: HumanAddr::from("bidder_1"),
+    let env = mock_env().at_block_height(fund_block);
+    let info = mock_info("funder", &coins(deposit_amount, NOT_ABC_COIN));
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::FundName {
+        name: "example".into(),
+        owner: "bidder_1".into(),
     });
     assert_eq!(res.is_err(), true);
 }
 
 #[test]
 fn fund_name_fails_with_too_much_funding() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -929,7 +946,7 @@ fn fund_name_fails_with_too_much_funding() {
     let res = Bid::on("example", "bidder_1", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -937,32 +954,33 @@ fn fund_name_fails_with_too_much_funding() {
     // over the max limit.
     let fund_block = 1236;
     let deposit_amount: u128 = 1_773;
-    let env = mock_env("funder", &coins(deposit_amount, ABC_COIN))
-        .at_block_height(fund_block);
-    let res = handle(&mut deps, env, HandleMsg::FundName {
-        name: "example".to_string(),
-        owner: HumanAddr::from("bidder_1"),
+    let env = mock_env().at_block_height(fund_block);
+    let info = mock_info("funder", &coins(deposit_amount, ABC_COIN));
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::FundName {
+        name: "example".into(),
+        owner: "bidder_1".into(),
     });
     assert_eq!(res.is_err(), true);
 
     // Reduce the funding under the limit should result in success.
     let deposit_amount: u128 = 1_772;
-    let env = mock_env("funder", &coins(deposit_amount, ABC_COIN))
-        .at_block_height(fund_block);
-    handle(&mut deps, env, HandleMsg::FundName {
-        name: "example".to_string(),
-        owner: HumanAddr::from("bidder_1"),
+    let env = mock_env().at_block_height(fund_block);
+    let info = mock_info("funder", &coins(deposit_amount, ABC_COIN));
+    execute(deps.as_mut(), env, info, ExecuteMsg::FundName {
+        name: "example".into(),
+        owner: "bidder_1".into(),
     }).unwrap();
 }
 
 #[test]
 fn set_lower_rate() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -970,15 +988,16 @@ fn set_lower_rate() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Owner submits requests to decrease the charged rate
     let rate_change_block = 100_000;
-    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(98u64),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -993,17 +1012,18 @@ fn set_lower_rate() {
         .transition_delay_end(rate_change_block)
         .bid_delay_end(rate_change_block + 86400 + 2254114)
         .expire_block(Some(rate_change_block + 10071428))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn set_higher_rate() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -1011,15 +1031,16 @@ fn set_higher_rate() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Owner submits requests to increase the charged rate
     let rate_change_block = 100_000;
-    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(246u64),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -1034,17 +1055,18 @@ fn set_higher_rate() {
         .transition_delay_end(rate_change_block)
         .bid_delay_end(rate_change_block + 86400 + 2254114)
         .expire_block(Some(rate_change_block + 4012195))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn set_rate_during_counter_delay_fails() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block = 1234;
@@ -1052,15 +1074,16 @@ fn set_rate_during_counter_delay_fails() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // First bidder submits requests to change the charged rate
     let rate_change_block = 2400;
-    let env = mock_env("bidder_1", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(246u64),
     });
     assert_eq!(res.is_err(), true);
@@ -1070,15 +1093,16 @@ fn set_rate_during_counter_delay_fails() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
     // Second bidder submits requests to change the charged rate
     let rate_change_block = 80000;
-    let env = mock_env("bidder_2", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder_2", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(98u64),
     });
     assert_eq!(res.is_err(), true);
@@ -1086,12 +1110,13 @@ fn set_rate_during_counter_delay_fails() {
 
 #[test]
 fn set_rate_as_non_owner_fails() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block = 1234;
@@ -1099,7 +1124,7 @@ fn set_rate_as_non_owner_fails() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -1108,28 +1133,30 @@ fn set_rate_as_non_owner_fails() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
     // First bidder submits requests to change the charged rate
     let rate_change_block = 200_000;
-    let env = mock_env("bidder_1", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(246u64),
     });
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::Unauthorized { .. })));
 }
 
 #[test]
 fn set_rate_outside_of_lower_bound_fails() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -1137,23 +1164,25 @@ fn set_rate_outside_of_lower_bound_fails() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Owner submits requests to increase the charged rate
     let rate_change_block = 100_000;
-    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(438u64),
     });
     assert_eq!(res.is_err(), true);
 
     // Success with lower rate
-    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(437u64),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -1161,12 +1190,13 @@ fn set_rate_outside_of_lower_bound_fails() {
 
 #[test]
 fn set_rate_outside_of_upper_bound_fails() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -1174,23 +1204,25 @@ fn set_rate_outside_of_upper_bound_fails() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Owner submits requests to decrease the charged rate
     let rate_change_block = 100_000;
-    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(43u64),
     });
     assert_eq!(res.is_err(), true);
 
     // Success with higher rate
-    let env = mock_env("bidder", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(44u64),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -1200,12 +1232,13 @@ fn set_rate_outside_of_upper_bound_fails() {
 // and a transition when a counter bid wins.
 #[test]
 fn set_rate_allows_bidding_do_transition() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block = 1234;
@@ -1213,15 +1246,16 @@ fn set_rate_allows_bidding_do_transition() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Owner submits requests to decrease the charged rate
     let rate_change_block = 100_000;
-    let env = mock_env("bidder_1", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(120u64),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -1231,7 +1265,7 @@ fn set_rate_allows_bidding_do_transition() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(121)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -1245,19 +1279,20 @@ fn set_rate_allows_bidding_do_transition() {
         .transition_delay_end(bid_2_block + 86400 + 259200)
         .bid_delay_end(bid_2_block + 86400 + 2254114)
         .expire_block(Some(bid_2_block + 8264462))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 // Rate change by A. This should trigger a counter delay of allowed bidding
 // and no transition when the counter bid does not win.
 #[test]
 fn set_rate_allows_bidding_no_transition() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block = 1234;
@@ -1265,15 +1300,16 @@ fn set_rate_allows_bidding_no_transition() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Owner submits requests to decrease the charged rate
     let rate_change_block = 100_000;
-    let env = mock_env("bidder_1", &[]).at_block_height(rate_change_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_block);
+    let info = mock_info("bidder_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(120u64),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -1284,7 +1320,7 @@ fn set_rate_allows_bidding_no_transition() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(121)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -1294,7 +1330,7 @@ fn set_rate_allows_bidding_no_transition() {
     let res = Bid::on("example", "bidder_1", bid_3_block)
         .deposit(deposit_amount)
         .rate(122)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -1308,19 +1344,20 @@ fn set_rate_allows_bidding_no_transition() {
         .transition_delay_end(bid_3_block)
         .bid_delay_end(bid_3_block + 86400 + 2254114)
         .expire_block(Some(bid_3_block + 8196721))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 // Rate change by A. This should trigger a counter delay of allowed bidding
 // and a continuation of the existing transition when the counter does not win.
 #[test]
 fn set_rate_allows_bidding_continued_transition() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block = 1234;
@@ -1328,15 +1365,16 @@ fn set_rate_allows_bidding_continued_transition() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Owner submits requests to decrease the charged rate
     let rate_change_1_block = 100_000;
-    let env = mock_env("bidder_1", &[]).at_block_height(rate_change_1_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_1_block);
+    let info = mock_info("bidder_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(120u64),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -1347,15 +1385,16 @@ fn set_rate_allows_bidding_continued_transition() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(121)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
     // New owner requests change to decrease the charged rate during transition
     let rate_change_2_block = bid_2_block + 100_000;
-    let env = mock_env("bidder_2", &[]).at_block_height(rate_change_2_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameRate {
-        name: "example".to_string(),
+    let env = mock_env().at_block_height(rate_change_2_block);
+    let info = mock_info("bidder_2", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameRate {
+        name: "example".into(),
         rate: Uint128::from(120u64),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -1366,7 +1405,7 @@ fn set_rate_allows_bidding_continued_transition() {
     let res = Bid::on("example", "bidder_3", bid_3_block)
         .deposit(deposit_amount)
         .rate(121)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -1376,7 +1415,7 @@ fn set_rate_allows_bidding_continued_transition() {
     let res = Bid::on("example", "bidder_2", bid_4_block)
         .deposit(deposit_amount)
         .rate(122)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
@@ -1390,17 +1429,18 @@ fn set_rate_allows_bidding_continued_transition() {
         .transition_delay_end(bid_2_block + 86400 + 259200)
         .bid_delay_end(bid_4_block + 86400 + 2254114)
         .expire_block(Some(bid_4_block + 8196721))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn transfer_owner() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -1408,16 +1448,17 @@ fn transfer_owner() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Ownership transferred
     let transfer_block = 100_000;
-    let env = mock_env("bidder", &[]).at_block_height(transfer_block);
-    let res = handle(&mut deps, env, HandleMsg::TransferNameOwner {
-        name: "example".to_string(),
-        to: HumanAddr::from("receiver"),
+    let env = mock_env().at_block_height(transfer_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::TransferNameOwner {
+        name: "example".into(),
+        to: "receiver".into(),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
@@ -1429,17 +1470,18 @@ fn transfer_owner() {
         .transition_delay_end(bid_block)
         .bid_delay_end(bid_block + 86400 + 2254114)
         .expire_block(Some(bid_block + 8130081))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn transfer_owner_during_counter_bid() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block = 1234;
@@ -1447,7 +1489,7 @@ fn transfer_owner_during_counter_bid() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -1457,16 +1499,17 @@ fn transfer_owner_during_counter_bid() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
     // Original owner can transfer their expiring ownership
     let transfer_block = 2342749;
-    let env = mock_env("bidder_1", &[]).at_block_height(transfer_block);
-    let res = handle(&mut deps, env, HandleMsg::TransferNameOwner {
-        name: "example".to_string(),
-        to: HumanAddr::from("receiver_1"),
+    let env = mock_env().at_block_height(transfer_block);
+    let info = mock_info("bidder_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::TransferNameOwner {
+        name: "example".into(),
+        to: "receiver_1".into(),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
@@ -1478,14 +1521,15 @@ fn transfer_owner_during_counter_bid() {
         .transition_delay_end(bid_2_block + 86400 + 259200)
         .bid_delay_end(bid_2_block + 86400 + 2254114)
         .expire_block(Some(bid_2_block + 8064516))
-        .assert(&deps);
+        .assert(deps.as_ref());
 
     // Highest bid owner can also transfer their ownership of the bid and
     // potential future ownership of the name.
-    let env = mock_env("bidder_2", &[]).at_block_height(transfer_block);
-    let res = handle(&mut deps, env, HandleMsg::TransferNameOwner {
-        name: "example".to_string(),
-        to: HumanAddr::from("receiver_2"),
+    let env = mock_env().at_block_height(transfer_block);
+    let info = mock_info("bidder_2", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::TransferNameOwner {
+        name: "example".into(),
+        to: "receiver_2".into(),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
@@ -1494,17 +1538,18 @@ fn transfer_owner_during_counter_bid() {
         .begin_block(bid_2_block)
         .begin_deposit(deposit_amount)
         .previous_owner(Some("receiver_1"))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn transfer_owner_fails_if_not_owner() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -1512,28 +1557,30 @@ fn transfer_owner_fails_if_not_owner() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Ownership transfer fails
     let transfer_block = 100_000;
-    let env = mock_env("other", &[]).at_block_height(transfer_block);
-    let res = handle(&mut deps, env, HandleMsg::TransferNameOwner {
-        name: "example".to_string(),
-        to: HumanAddr::from("receiver"),
+    let env = mock_env().at_block_height(transfer_block);
+    let info = mock_info("other", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::TransferNameOwner {
+        name: "example".into(),
+        to: "receiver".into(),
     });
     assert_eq!(res.is_err(), true);
 }
 
 #[test]
 fn set_controller_new_bid() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_block = 1234;
@@ -1541,42 +1588,45 @@ fn set_controller_new_bid() {
     let res = Bid::on("example", "bidder", bid_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
     // Owner cannot set controller before end of counter delay
     let set_controller_block = bid_block + 86400 - 1;
-    let env = mock_env("bidder", &[]).at_block_height(set_controller_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameController {
-        name: "example".to_string(),
-        controller: HumanAddr::from("controller"),
+    let env = mock_env().at_block_height(set_controller_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameController {
+        name: "example".into(),
+        controller: "controller".into(),
     });
     assert_eq!(res.is_err(), true);
 
     // Owner can set controller after end of counter delay
     let set_controller_block = bid_block + 86400;
-    let env = mock_env("bidder", &[]).at_block_height(set_controller_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameController {
-        name: "example".to_string(),
-        controller: HumanAddr::from("controller"),
+    let env = mock_env().at_block_height(set_controller_block);
+    let info = mock_info("bidder", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameController {
+        name: "example".into(),
+        controller: "controller".into(),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
         .owner("bidder")
         .controller(Some("controller"))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn set_controller_during_counter_delay() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     let bid_1_block = 1234;
@@ -1584,7 +1634,7 @@ fn set_controller_during_counter_delay() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(123)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -1594,56 +1644,60 @@ fn set_controller_during_counter_delay() {
     let res = Bid::on("example", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 2);
 
     // Original owner can set controller
     let transfer_block = 2342749;
-    let env = mock_env("bidder_1", &[]).at_block_height(transfer_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameController {
-        name: "example".to_string(),
-        controller: HumanAddr::from("controller_1"),
+    let env = mock_env().at_block_height(transfer_block);
+    let info = mock_info("bidder_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameController {
+        name: "example".into(),
+        controller: "controller_1".into(),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
         .owner("bidder_2")
         .controller(Some("controller_1"))
-        .assert(&deps);
+        .assert(deps.as_ref());
 
     // Highest bid owner cannot set controller before end of counter delay
     let set_controller_block = 2342750;
-    let env = mock_env("bidder_2", &[]).at_block_height(set_controller_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameController {
-        name: "example".to_string(),
-        controller: HumanAddr::from("controller_2"),
+    let env = mock_env().at_block_height(set_controller_block);
+    let info = mock_info("bidder_2", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameController {
+        name: "example".into(),
+        controller: "controller_2".into(),
     });
     assert_eq!(res.is_err(), true);
 
     // After the counter delay ends, the highest bidder can set the controller
     let set_controller_block = 2432750;
-    let env = mock_env("bidder_2", &[]).at_block_height(set_controller_block);
-    let res = handle(&mut deps, env, HandleMsg::SetNameController {
-        name: "example".to_string(),
-        controller: HumanAddr::from("controller_2"),
+    let env = mock_env().at_block_height(set_controller_block);
+    let info = mock_info("bidder_2", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameController {
+        name: "example".into(),
+        controller: "controller_2".into(),
     }).unwrap();
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
         .owner("bidder_2")
         .controller(Some("controller_2"))
-        .assert(&deps);
+        .assert(deps.as_ref());
 }
 
 #[test]
 fn query_all_name_states() {
-    let mut deps = mock_dependencies(20, &[]);
+    let mut deps = mock_dependencies(&[]);
 
     let msg = default_init();
-    let env = mock_env("creator", &[]);
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
 
-    let res = init(&mut deps, env, msg).unwrap();
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
     // First bid
@@ -1652,7 +1706,7 @@ fn query_all_name_states() {
     let res = Bid::on("example", "bidder_1", bid_1_block)
         .deposit(deposit_amount)
         .rate(600)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -1662,7 +1716,7 @@ fn query_all_name_states() {
     let res = Bid::on("other", "bidder_2", bid_2_block)
         .deposit(deposit_amount)
         .rate(124)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
@@ -1672,11 +1726,12 @@ fn query_all_name_states() {
     let res = Bid::on("abc-def", "bidder_1", bid_3_block)
         .deposit(deposit_amount)
         .rate(140_000)
-        .handle(&mut deps)
+        .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
-    let res = query(&deps, QueryMsg::GetAllNameStates {
+    let env = mock_env();
+    let res = query(deps.as_ref(), env, QueryMsg::GetAllNameStates {
         start_after: None,
         limit: Some(2),
     }).unwrap();
@@ -1689,7 +1744,8 @@ fn query_all_name_states() {
     assert_eq!(state.names[1].state.rate.u128(), 600);
 
     // Query for second page
-    let res = query(&deps, QueryMsg::GetAllNameStates {
+    let env = mock_env();
+    let res = query(deps.as_ref(), env, QueryMsg::GetAllNameStates {
         start_after: Some("example".into()),
         limit: Some(2),
     }).unwrap();

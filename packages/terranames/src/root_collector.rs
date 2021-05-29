@@ -1,4 +1,4 @@
-use cosmwasm_std::{Decimal, HumanAddr, Uint128};
+use cosmwasm_std::{Addr, Decimal, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -6,11 +6,11 @@ use cw20::Cw20ReceiveMsg;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub struct InitMsg {
+pub struct InstantiateMsg {
     /// Terraswap factory
-    pub terraswap_factory: HumanAddr,
+    pub terraswap_factory: String,
     /// Terranames token
-    pub terranames_token: HumanAddr,
+    pub terranames_token: String,
     /// Stablecoin denomination
     pub stable_denom: String,
     /// Minimum token price in stables (also used if the swap pool is empty)
@@ -29,7 +29,7 @@ pub enum QueryMsg {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum HandleMsg {
+pub enum ExecuteMsg {
     ConsumeExcessStable {},
     ConsumeExcessTokens {},
     Receive(Cw20ReceiveMsg),
@@ -42,9 +42,9 @@ pub struct MigrateMsg {}
 #[serde(rename_all = "snake_case")]
 pub struct ConfigResponse {
     /// Terranames token
-    pub terranames_token: HumanAddr,
+    pub terranames_token: Addr,
     /// Terraswap pair
-    pub terraswap_pair: HumanAddr,
+    pub terraswap_pair: Addr,
     /// Stablecoin denomination
     pub stable_denom: String,
     /// Minimum token price in stables (also used if the swap pool is empty)

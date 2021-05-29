@@ -1,6 +1,6 @@
 use cosmwasm_std::{
-    from_binary, to_binary, Binary, HumanAddr, QuerierResult, QueryRequest,
-    SystemError, WasmQuery,
+    from_binary, to_binary, Addr, Binary, CustomQuery, QuerierResult, QueryRequest,
+    SystemError, SystemResult, WasmQuery,
 };
 use terraswap::asset::{Asset, PairInfo};
 use terraswap::factory::QueryMsg as FactoryQueryMsg;
@@ -9,7 +9,7 @@ use terraswap::pair::{QueryMsg as PairQueryMsg, PoolResponse};
 /// Mock querier for terraswap contracts
 #[derive(Clone)]
 pub struct TerraswapQuerier {
-    pub factory_addr: HumanAddr,
+    pub factory_addr: Addr,
     pub pair: Option<PairInfo>,
     pub pair_total_share: u128,
     pub pair_1_amount: u128,
@@ -17,7 +17,7 @@ pub struct TerraswapQuerier {
 }
 
 impl TerraswapQuerier {
-    pub fn new(factory_addr: HumanAddr) -> Self {
+    pub fn new(factory_addr: Addr) -> Self {
         Self {
             factory_addr,
             pair: None,
@@ -27,7 +27,7 @@ impl TerraswapQuerier {
         }
     }
 
-    pub fn handle_query<T>(&self, request: &QueryRequest<T>) -> Option<QuerierResult> {
+    pub fn handle_query<T: CustomQuery>(&self, request: &QueryRequest<T>) -> Option<QuerierResult> {
         let res = match &request {
             QueryRequest::Wasm(WasmQuery::Smart { msg, contract_addr }) => {
                 if contract_addr == &self.factory_addr {
@@ -55,14 +55,18 @@ impl TerraswapQuerier {
                 if let Some(ref pair) = self.pair {
                     if asset_infos == pair.asset_infos ||
                             (&asset_infos[1], &asset_infos[0]) == (&pair.asset_infos[0], &pair.asset_infos[1]) {
-                        return Some(Ok(to_binary(&pair)));
+                        return Some(
+                            SystemResult::Ok(to_binary(&pair).into())
+                        );
                     }
                 }
 
-                return Some(Err(SystemError::InvalidRequest {
-                    error: "Mock terraswap registry does not contain this pair".to_string(),
-                    request: msg.as_slice().into(),
-                }));
+                return Some(SystemResult::Err(
+                    SystemError::InvalidRequest {
+                        error: "Mock terraswap registry does not contain this pair".to_string(),
+                        request: msg.as_slice().into(),
+                    },
+                ));
             },
             _ => unimplemented!(),
         };
@@ -84,16 +88,18 @@ impl TerraswapQuerier {
                             },
                         ],
                         total_share: self.pair_total_share.into(),
-                    }))
+                    }).into())
                 } else {
-                    return Some(Err(SystemError::InvalidRequest {
-                        error: "Mock terraswap registry doe not contain this pair".to_string(),
-                        request: msg.as_slice().into(),
-                    }));
+                    return Some(
+                        SystemResult::Err(SystemError::InvalidRequest {
+                            error: "Mock terraswap registry doe not contain this pair".to_string(),
+                            request: msg.as_slice().into(),
+                        }),
+                    );
                 }
             },
             _ => unimplemented!(),
         };
-        Some(res)
+        Some(res.into())
     }
 }

@@ -1,4 +1,4 @@
-use cosmwasm_std::{HumanAddr, Uint128};
+use cosmwasm_std::{Addr, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 pub const RATE_BLOCK_DENOM: u64 = 1_000_000;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct InitMsg {
+pub struct InstantiateMsg {
     /// Collector of funds
-    pub collector_addr: HumanAddr,
+    pub collector_addr: String,
     /// Stablecoin denomination
     pub stable_denom: String,
     /// Minimum number of blocks to allow bidding for
@@ -25,7 +25,7 @@ pub struct InitMsg {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum HandleMsg {
+pub enum ExecuteMsg {
     BidName {
         /// Name to bid on
         name: String,
@@ -36,7 +36,7 @@ pub enum HandleMsg {
         /// Name to fund
         name: String,
         /// Current owner (fails if this is not the owner)
-        owner: HumanAddr,
+        owner: String,
     },
     SetNameRate {
         /// Name to change rate of
@@ -48,13 +48,13 @@ pub enum HandleMsg {
         /// Name to transfer
         name: String,
         /// Destination to transfer ownership of name to
-        to: HumanAddr,
+        to: String,
     },
     SetNameController {
         /// Name to set controller for
         name: String,
         /// New controller (someone who can set values only)
-        controller: HumanAddr,
+        controller: String,
     },
 }
 
@@ -80,7 +80,7 @@ pub struct MigrateMsg {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ConfigResponse {
     /// Collector of funds
-    pub collector_addr: HumanAddr,
+    pub collector_addr: Addr,
     /// Stablecoin denomination
     pub stable_denom: String,
     /// Minimum number of blocks to allow bidding for
@@ -98,9 +98,9 @@ pub struct ConfigResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct NameStateResponse {
     /// Owner of the name
-    pub owner: HumanAddr,
+    pub owner: Addr,
     /// Controller of the name
-    pub controller: Option<HumanAddr>,
+    pub controller: Option<Addr>,
 
     /// Amount of stablecoin per RATE_BLOCK_DENOM charged
     pub rate: Uint128,
@@ -110,7 +110,7 @@ pub struct NameStateResponse {
     pub begin_deposit: Uint128,
 
     /// Previous owner
-    pub previous_owner: Option<HumanAddr>,
+    pub previous_owner: Option<Addr>,
 
     /// Counter-delay block end
     pub counter_delay_end: u64,

@@ -51,11 +51,11 @@ impl TaxQuerier {
                             TerraQuery::TaxRate {} => {
                                 Ok(to_binary(&TaxRateResponse {
                                     rate: self.rate,
-                                }))
+                                }).into())
                             },
                             TerraQuery::TaxCap { denom } => {
                                 let cap = self.caps.get(denom).copied().unwrap_or_default();
-                                Ok(to_binary(&TaxCapResponse { cap }))
+                                Ok(to_binary(&TaxCapResponse { cap }).into())
                             },
                             _ => return None,
                         }
@@ -65,6 +65,6 @@ impl TaxQuerier {
             },
             _ => return None,
         };
-        Some(res)
+        Some(res.into())
     }
 }

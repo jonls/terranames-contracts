@@ -1,26 +1,27 @@
 use cosmwasm_std::{
-    log, to_binary, Api, BankMsg, Binary, CanonicalAddr, Coin, CosmosMsg,
-    Env, Extern, HandleResponse, HandleResult, HumanAddr, InitResponse,
-    InitResult, MigrateResponse, MigrateResult, Querier, StdError, StdResult,
-    Storage, Uint128,
+    attr, entry_point, to_binary, Addr, BankMsg, Coin, CosmosMsg, Deps,
+    DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse, StdError,
+    StdResult, Response, Uint128,
 };
 
 use terranames::auction::{
     deposit_from_blocks_ceil, deposit_from_blocks_floor, ConfigResponse,
-    AllNameStatesResponse, HandleMsg, InitMsg, MigrateMsg, NameStateItem,
-    NameStateResponse, QueryMsg,
+    AllNameStatesResponse, ExecuteMsg, InstantiateMsg, MigrateMsg,
+    NameStateItem, NameStateResponse, QueryMsg,
 };
 use terranames::terra::deduct_coin_tax;
 
+use crate::errors::{ContractError, Unauthorized};
 use crate::state::{
     collect_name_states, read_config, read_name_state, read_option_name_state,
     store_config, store_name_state, Config, NameState, OwnerStatus,
 };
 
+type ContractResult<T> = Result<T, ContractError>;
+
 /// Return the funds of type denom attached in the request.
-fn get_sent_funds(env: &Env, denom: &str) -> Uint128 {
-    env.message
-        .sent_funds
+fn get_sent_funds(info: &MessageInfo, denom: &str) -> Uint128 {
+    info.funds
         .iter()
         .find(|c| c.denom == denom)
         .map(|c| c.amount)
@@ -33,20 +34,19 @@ fn get_sent_funds(env: &Env, denom: &str) -> Uint128 {
 /// immediately, in order to avoid repeated tax on transfers. Instead users can
 /// use the refund balance in calls needing funds. Also need a separate call to
 /// actually send the refund balance back.
-fn refund_deposit_msg<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: &Env,
+fn refund_deposit_msg(
+    querier: &QuerierWrapper,
+    _env: &Env,
     config: &Config,
-    to: &HumanAddr,
+    to: &Addr,
     amount: Uint128,
 ) -> StdResult<CosmosMsg> {
     Ok(CosmosMsg::Bank(
         BankMsg::Send {
-            from_address: env.contract.address.clone(),
-            to_address: to.clone(),
+            to_address: to.into(),
             amount: vec![
                 deduct_coin_tax(
-                    &deps,
+                    querier,
                     Coin {
                         denom: config.stable_denom.clone(),
                         amount,
@@ -62,20 +62,19 @@ fn refund_deposit_msg<S: Storage, A: Api, Q: Querier>(
 /// Currently just sends funds to the collector. In the future this could use
 /// a WasmMsg to trigger some kind of accounting in the collector and/or giving
 /// some priviledge to the sender (e.g. reward tokens or something like that).
-fn send_to_collector_msg<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: &Env,
+fn send_to_collector_msg(
+    querier: &QuerierWrapper,
+    _env: &Env,
     config: &Config,
-    _source_addr: &HumanAddr,
+    _source_addr: &Addr,
     amount: Uint128,
 ) -> StdResult<CosmosMsg> {
     Ok(CosmosMsg::Bank(
         BankMsg::Send {
-            from_address: env.contract.address.clone(),
-            to_address: deps.api.human_address(&config.collector_addr)?,
+            to_address: config.collector_addr.to_string(),
             amount: vec![
                 deduct_coin_tax(
-                    &deps,
+                    querier,
                     Coin {
                         denom: config.stable_denom.clone(),
                         amount,
@@ -86,16 +85,17 @@ fn send_to_collector_msg<S: Storage, A: Api, Q: Querier>(
     ))
 }
 
-
-pub fn init<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-    msg: InitMsg,
-) -> InitResult {
-    let collector_addr = deps.api.canonical_address(&msg.collector_addr)?;
+#[entry_point]
+pub fn instantiate(
+    deps: DepsMut,
+    _env: Env,
+    _info: MessageInfo,
+    msg: InstantiateMsg,
+) -> ContractResult<Response> {
+    let collector_addr = deps.api.addr_validate(&msg.collector_addr)?;
 
     if !(msg.min_lease_blocks <= msg.max_lease_blocks) {
-        return Err(StdError::generic_err("Invalid min/max lease blocks"));
+        return Err(StdError::generic_err("Invalid min/max lease blocks").into());
     }
 
     let state = Config {
@@ -108,106 +108,117 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
         bid_delay_blocks: msg.bid_delay_blocks,
     };
 
-    store_config(&mut deps.storage, &state)?;
+    store_config(deps.storage, &state)?;
 
-    Ok(InitResponse::default())
+    Ok(Response::default())
 }
 
-pub fn handle<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+#[entry_point]
+pub fn execute(
+    deps: DepsMut,
     env: Env,
-    msg: HandleMsg,
-) -> HandleResult {
+    info: MessageInfo,
+    msg: ExecuteMsg,
+) -> ContractResult<Response> {
     match msg {
-        HandleMsg::BidName { name, rate } => {
-            handle_bid(deps, env, name, rate)
+        ExecuteMsg::BidName { name, rate } => {
+            execute_bid(deps, env, info, name, rate)
         },
-        HandleMsg::FundName { name, owner } => {
-            handle_fund(deps, env, name, owner)
+        ExecuteMsg::FundName { name, owner } => {
+            let owner = deps.api.addr_validate(&owner)?;
+            execute_fund(deps, env, info, name, owner)
         },
-        HandleMsg::SetNameRate { name, rate } => {
-            handle_set_rate(deps, env, name, rate)
+        ExecuteMsg::SetNameRate { name, rate } => {
+            execute_set_rate(deps, env, info, name, rate)
         },
-        HandleMsg::TransferNameOwner { name, to } => {
-            handle_transfer_owner(deps, env, name, to)
+        ExecuteMsg::TransferNameOwner { name, to } => {
+            let to = deps.api.addr_validate(&to)?;
+            execute_transfer_owner(deps, env, info, name, to)
         },
-        HandleMsg::SetNameController { name, controller } => {
-            handle_set_controller(deps, env, name, controller)
+        ExecuteMsg::SetNameController { name, controller } => {
+            let controller = deps.api.addr_validate(&controller)?;
+            execute_set_controller(deps, env, info, name, controller)
         },
     }
 }
 
-fn handle_bid<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+fn execute_bid(
+    deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     name: String,
     rate: Uint128,
-) -> HandleResult {
-    if let Some(name_state) = read_option_name_state(&deps.storage, &name)? {
-        let config = read_config(&deps.storage)?;
+) -> ContractResult<Response> {
+    if let Some(name_state) = read_option_name_state(deps.storage, &name)? {
+        let config = read_config(deps.storage)?;
         let owner_status = name_state.owner_status(&config, env.block.height);
         match owner_status {
             OwnerStatus::Valid { owner, transition_reference_block } |
-            OwnerStatus::CounterDelay { name_owner: owner, transition_reference_block, .. } |
             OwnerStatus::TransitionDelay { owner, transition_reference_block } => {
-                handle_bid_existing(
-                    deps, env, name, rate, config, name_state, owner,
+                execute_bid_existing(
+                    deps, env, info, name, rate, config, name_state, Some(owner),
+                    transition_reference_block,
+                )
+            },
+            OwnerStatus::CounterDelay { name_owner: owner, transition_reference_block, .. } => {
+                execute_bid_existing(
+                    deps, env, info, name, rate, config, name_state, owner,
                     transition_reference_block,
                 )
             },
             OwnerStatus::Expired { expire_block, .. } => {
-                handle_bid_new(
-                    deps, env, name, rate, expire_block,
+                execute_bid_new(
+                    deps, env, info, name, rate, expire_block,
                 )
             },
         }
     } else {
-        handle_bid_new(deps, env, name, rate, 0)
+        execute_bid_new(deps, env, info, name, rate, 0)
     }
 }
 
-fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+fn execute_bid_existing(
+    deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     name: String,
     rate: Uint128,
     config: Config,
     mut name_state: NameState,
-    owner: CanonicalAddr,
+    owner: Option<Addr>,
     transition_reference_block: u64,
-) -> HandleResult {
-    let sender_canonical = deps.api.canonical_address(&env.message.sender)?;
-    if sender_canonical == name_state.owner {
-        return Err(StdError::generic_err("Cannot bid as current owner"));
+) -> ContractResult<Response> {
+    if info.sender == name_state.owner {
+        return Err(StdError::generic_err("Cannot bid as current owner").into());
     }
 
     let blocks_spent_since_bid = match name_state.blocks_spent_since_bid(env.block.height) {
         Some(blocks_spent) => blocks_spent,
-        None => return Err(StdError::generic_err("Invalid block height"))
+        None => return Err(StdError::generic_err("Invalid block height").into())
     };
 
     if blocks_spent_since_bid >= config.counter_delay_blocks &&
             blocks_spent_since_bid < config.counter_delay_blocks + config.bid_delay_blocks &&
             !name_state.rate.is_zero() {
-        return Err(StdError::generic_err("Unable to bid in the current block"));
+        return Err(StdError::generic_err("Unable to bid in the current block").into());
     }
 
     if rate <= name_state.rate {
         return Err(StdError::generic_err(format!(
             "Bid rate must be greater than {} {}",
             name_state.rate, config.stable_denom,
-        )));
+        )).into());
     }
 
-    let msg_deposit = get_sent_funds(&env, &config.stable_denom);
+    let msg_deposit = get_sent_funds(&info, &config.stable_denom);
     let deposit_spent = deposit_from_blocks_ceil(blocks_spent_since_bid, name_state.rate);
-    let deposit_left = (name_state.begin_deposit - deposit_spent).unwrap_or_else(|_| Uint128::zero());
+    let deposit_left = name_state.begin_deposit.saturating_sub(deposit_spent);
 
     if msg_deposit <= deposit_left {
         return Err(StdError::generic_err(format!(
             "Deposit must be greater than {} {}",
             deposit_left, config.stable_denom,
-        )))
+        )).into())
     }
 
     // TODO I'm uncertain if these limits are necessary though they may be good
@@ -220,27 +231,27 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
         return Err(StdError::generic_err(
             "Deposit is outside of the allowed range",
-        ));
+        ).into());
     }
 
     let previous_bidder = name_state.owner;
 
-    name_state.previous_owner = owner;
+    name_state.previous_owner = owner.clone();
     name_state.previous_transition_reference_block = transition_reference_block;
-    name_state.owner = sender_canonical;
+    name_state.owner = info.sender.clone();
     name_state.rate = rate;
     name_state.begin_block = env.block.height;
     name_state.begin_deposit = msg_deposit;
 
     // Only update transition reference block if ownership is assigned to a new
     // owner.
-    if name_state.owner != name_state.previous_owner {
+    if Some(name_state.owner.clone()) != owner {
         name_state.transition_reference_block = env.block.height;
     } else {
         name_state.transition_reference_block = name_state.previous_transition_reference_block;
     }
 
-    store_name_state(&mut deps.storage, &name, &name_state)?;
+    store_name_state(deps.storage, &name, &name_state)?;
 
     let mut messages = vec![];
 
@@ -248,10 +259,10 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
     if !deposit_left.is_zero() {
         messages.push(
             refund_deposit_msg(
-                deps,
+                &deps.querier,
                 &env,
                 &config,
-                &deps.api.human_address(&previous_bidder)?,
+                &previous_bidder,
                 deposit_left,
             )?,
         );
@@ -261,47 +272,49 @@ fn handle_bid_existing<S: Storage, A: Api, Q: Querier>(
     // in order to drain dust etc. out of the contract.
 
     // Send excess deposit to collector
-    let excess_deposit = (msg_deposit - deposit_left)?;
+    let excess_deposit = msg_deposit.checked_sub(deposit_left)?;
     messages.push(
         send_to_collector_msg(
-            deps,
+            &deps.querier,
             &env,
             &config,
-            &env.message.sender,
+            &info.sender,
             excess_deposit,
         )?
     );
 
-    let mut logs = vec![
-        log("action", "bid"),
-        log("owner", env.message.sender),
-        log("rate", rate),
-        log("deposit", msg_deposit),
-        log("refund", deposit_left),
+    let mut attributes = vec![
+        attr("action", "bid"),
+        attr("owner", info.sender),
+        attr("rate", rate),
+        attr("deposit", msg_deposit),
+        attr("refund", deposit_left),
     ];
 
-    if name_state.previous_owner != CanonicalAddr::default() {
-        logs.push(
-            log("previous_owner", deps.api.human_address(&name_state.previous_owner)?),
+    if let Some(previous_owner) = name_state.previous_owner {
+        attributes.push(
+            attr("previous_owner", previous_owner),
         );
     }
 
-    Ok(HandleResponse {
+    Ok(Response {
         messages,
-        log: logs,
+        attributes,
         data: None,
+        submessages: vec![],
     })
 }
 
-fn handle_bid_new<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+fn execute_bid_new(
+    deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     name: String,
     rate: Uint128,
     transition_reference_block: u64,
-) -> HandleResult {
-    let config = read_config(&deps.storage)?;
-    let msg_deposit = get_sent_funds(&env, &config.stable_denom);
+) -> ContractResult<Response> {
+    let config = read_config(deps.storage)?;
+    let msg_deposit = get_sent_funds(&info, &config.stable_denom);
     let begin_block = env.block.height;
 
     let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
@@ -309,23 +322,22 @@ fn handle_bid_new<S: Storage, A: Api, Q: Querier>(
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
         return Err(StdError::generic_err(
             "Deposit is outside of the allowed range",
-        ));
+        ).into());
     }
 
-    let sender_canonical = deps.api.canonical_address(&env.message.sender)?;
     let name_state = NameState {
-        owner: sender_canonical.clone(),
-        controller: CanonicalAddr::default(),
+        owner: info.sender.clone(),
+        controller: None,
         transition_reference_block,
 
         begin_block: begin_block,
         begin_deposit: msg_deposit,
         rate: rate,
 
-        previous_owner: CanonicalAddr::default(),
+        previous_owner: None,
         previous_transition_reference_block: 0,
     };
-    store_name_state(&mut deps.storage, &name, &name_state)?;
+    store_name_state(deps.storage, &name, &name_state)?;
 
     let mut messages = vec![];
 
@@ -333,44 +345,46 @@ fn handle_bid_new<S: Storage, A: Api, Q: Querier>(
     if !msg_deposit.is_zero() {
         messages.push(
             send_to_collector_msg(
-                deps,
+                &deps.querier,
                 &env,
                 &config,
-                &env.message.sender,
+                &info.sender,
                 msg_deposit,
             )?
         );
     }
 
-    Ok(HandleResponse {
+    Ok(Response {
         messages,
-        log: vec![
-            log("action", "bid"),
-            log("owner", env.message.sender),
-            log("rate", rate),
-            log("deposit", msg_deposit),
+        attributes: vec![
+            attr("action", "bid"),
+            attr("owner", info.sender),
+            attr("rate", rate),
+            attr("deposit", msg_deposit),
         ],
         data: None,
+        submessages: vec![],
     })
 }
 
-fn handle_fund<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+fn execute_fund(
+    deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     name: String,
-    owner: HumanAddr,
-) -> HandleResult {
-    let config = read_config(&deps.storage)?;
-    let msg_deposit = get_sent_funds(&env, &config.stable_denom);
-    let mut name_state = read_name_state(&deps.storage, &name)?;
+    owner: Addr,
+) -> ContractResult<Response> {
+    let config = read_config(deps.storage)?;
+    let msg_deposit = get_sent_funds(&info, &config.stable_denom);
+    let mut name_state = read_name_state(deps.storage, &name)?;
 
     if msg_deposit.is_zero() {
-        return Err(StdError::generic_err("Fund deposit is zero"));
+        return Err(StdError::generic_err("Fund deposit is zero").into());
     }
 
-    let owner_canonical = deps.api.canonical_address(&owner)?;
+    let owner_canonical = owner;
     if name_state.owner != owner_canonical {
-        return Err(StdError::generic_err("Owner does not match expectation"));
+        return Err(StdError::generic_err("Owner does not match expectation").into());
     }
 
     let combined_deposit = msg_deposit + name_state.begin_deposit;
@@ -378,58 +392,58 @@ fn handle_fund<S: Storage, A: Api, Q: Querier>(
     if combined_deposit > max_deposit {
         return Err(StdError::generic_err(format!(
             "Deposit outside of allowed range, max allowed additional: {} {}",
-            (max_deposit - name_state.begin_deposit).unwrap_or_else(|_| Uint128::zero()),
+            max_deposit.saturating_sub(name_state.begin_deposit),
             config.stable_denom,
-        )));
+        )).into());
     }
 
     name_state.begin_deposit = combined_deposit;
-    store_name_state(&mut deps.storage, &name, &name_state)?;
+    store_name_state(deps.storage, &name, &name_state)?;
 
     let mut messages = vec![];
 
     // Send deposit to fund
     messages.push(
         send_to_collector_msg(
-            deps,
+            &deps.querier,
             &env,
             &config,
-            &env.message.sender,
+            &info.sender,
             msg_deposit,
         )?
     );
 
-    Ok(HandleResponse {
+    Ok(Response {
         messages,
-        log: vec![
-            log("action", "fund"),
-            log("deposit", combined_deposit),
+        attributes: vec![
+            attr("action", "fund"),
+            attr("deposit", combined_deposit),
         ],
         data: None,
+        submessages: vec![],
     })
 }
 
-fn handle_set_rate<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+fn execute_set_rate(
+    deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     name: String,
     rate: Uint128,
-) -> HandleResult {
-    let config = read_config(&deps.storage)?;
-    let mut name_state = read_name_state(&deps.storage, &name)?;
-    let sender_canonical = deps.api.canonical_address(&env.message.sender)?;
+) -> ContractResult<Response> {
+    let config = read_config(deps.storage)?;
+    let mut name_state = read_name_state(deps.storage, &name)?;
+    let sender_canonical = info.sender;
     let owner_status = name_state.owner_status(&config, env.block.height);
 
     if !owner_status.can_set_rate(&sender_canonical) {
-        return Err(StdError::unauthorized());
+        return Unauthorized.fail();
     }
 
     // Always round up spent deposit to avoid charging too little.
     let blocks_spent = env.block.height - name_state.begin_block;
     let spent_deposit = deposit_from_blocks_ceil(blocks_spent, name_state.rate);
-    let new_deposit = (
-        name_state.begin_deposit - spent_deposit
-    ).unwrap_or_else(|_| Uint128::zero()); // TODO <-- add test for this: last block spends slightly more than total deposit
+    let new_deposit = name_state.begin_deposit.saturating_sub(spent_deposit); // TODO <-- add test for this: last block spends slightly more than total deposit
 
     let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
     let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
@@ -437,46 +451,48 @@ fn handle_set_rate<S: Storage, A: Api, Q: Querier>(
     if new_deposit < min_deposit || new_deposit > max_deposit {
         return Err(StdError::generic_err(
             "Rate results in a lease outside of the allowed block range"
-        ));
+        ).into());
     }
 
     name_state.rate = rate;
     name_state.begin_block = env.block.height;
     name_state.begin_deposit = new_deposit;
-    name_state.previous_owner = name_state.owner.clone();
+    name_state.previous_owner = Some(name_state.owner.clone());
     name_state.previous_transition_reference_block = name_state.transition_reference_block;
-    store_name_state(&mut deps.storage, &name, &name_state)?;
+    store_name_state(deps.storage, &name, &name_state)?;
 
-    Ok(HandleResponse {
+    Ok(Response {
         messages: vec![],
-        log: vec![
-            log("action", "set_rate"),
-            log("rate", rate),
-            log("deposit", new_deposit),
+        attributes: vec![
+            attr("action", "set_rate"),
+            attr("rate", rate),
+            attr("deposit", new_deposit),
         ],
         data: None,
+        submessages: vec![],
     })
 }
 
-fn handle_transfer_owner<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+fn execute_transfer_owner(
+    deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     name: String,
-    to: HumanAddr,
-) -> HandleResult {
-    let config = read_config(&deps.storage)?;
-    let mut name_state = read_name_state(&deps.storage, &name)?;
-    let sender_canonical = deps.api.canonical_address(&env.message.sender)?;
+    to: Addr,
+) -> ContractResult<Response> {
+    let config = read_config(deps.storage)?;
+    let mut name_state = read_name_state(deps.storage, &name)?;
+    let sender_canonical = info.sender;
     let owner_status = name_state.owner_status(&config, env.block.height);
 
-    let new_owner = deps.api.canonical_address(&to)?;
+    let new_owner = to;
 
     if owner_status.can_transfer_name_owner(&sender_canonical) {
         match owner_status {
             // In the counter-delay state, the current owner is determined by
             // previous_owner since owner is the current highest bid holder.
             OwnerStatus::CounterDelay { .. } => {
-                name_state.previous_owner = new_owner.clone();
+                name_state.previous_owner = Some(new_owner.clone());
             },
             _ => {
                 name_state.owner = new_owner.clone();
@@ -486,73 +502,78 @@ fn handle_transfer_owner<S: Storage, A: Api, Q: Querier>(
         // This lets the current highest bid holder transfer their bid.
         name_state.owner = new_owner.clone();
     } else {
-        return Err(StdError::unauthorized());
+        return Unauthorized.fail();
     }
 
-    store_name_state(&mut deps.storage, &name, &name_state)?;
+    store_name_state(deps.storage, &name, &name_state)?;
 
-    Ok(HandleResponse {
+    Ok(Response {
         messages: vec![],
-        log: vec![
-            log("action", "transfer_owner"),
-            log("owner", new_owner),
+        attributes: vec![
+            attr("action", "transfer_owner"),
+            attr("owner", new_owner),
         ],
         data: None,
+        submessages: vec![],
     })
 }
 
-fn handle_set_controller<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
+fn execute_set_controller(
+    deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     name: String,
-    controller: HumanAddr,
-) -> HandleResult {
-    let config = read_config(&deps.storage)?;
-    let mut name_state = read_name_state(&deps.storage, &name)?;
-    let sender_canonical = deps.api.canonical_address(&env.message.sender)?;
+    controller: Addr,
+) -> ContractResult<Response> {
+    let config = read_config(deps.storage)?;
+    let mut name_state = read_name_state(deps.storage, &name)?;
+    let sender_canonical = info.sender;
     let owner_status = name_state.owner_status(&config, env.block.height);
 
     if !owner_status.can_set_controller(&sender_canonical) {
-        return Err(StdError::unauthorized());
+        return Unauthorized.fail();
     }
 
-    name_state.controller = deps.api.canonical_address(&controller)?;
-    store_name_state(&mut deps.storage, &name, &name_state)?;
+    name_state.controller = Some(controller.clone());
+    store_name_state(deps.storage, &name, &name_state)?;
 
-    Ok(HandleResponse {
+    Ok(Response {
         messages: vec![],
-        log: vec![
-            log("action", "set_controller"),
-            log("controller", controller),
+        attributes: vec![
+            attr("action", "set_controller"),
+            attr("controller", controller),
         ],
         data: None,
+        submessages: vec![],
     })
 }
 
-pub fn query<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
+#[entry_point]
+pub fn query(
+    deps: Deps,
+    _env: Env,
     msg: QueryMsg,
-) -> StdResult<Binary> {
+) -> ContractResult<QueryResponse> {
     match msg {
         QueryMsg::Config {} => {
-            to_binary(&query_config(deps)?)
+            Ok(to_binary(&query_config(deps)?)?)
         },
         QueryMsg::GetNameState { name } => {
-            to_binary(&query_name_state(deps, name)?)
+            Ok(to_binary(&query_name_state(deps, name)?)?)
         },
         QueryMsg::GetAllNameStates { start_after, limit } => {
-            to_binary(&query_all_name_states(deps, start_after, limit)?)
+            Ok(to_binary(&query_all_name_states(deps, start_after, limit)?)?)
         },
     }
 }
 
-fn query_config<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
-) -> StdResult<ConfigResponse> {
-    let config = read_config(&deps.storage)?;
+fn query_config(
+    deps: Deps,
+) -> ContractResult<ConfigResponse> {
+    let config = read_config(deps.storage)?;
 
     Ok(ConfigResponse {
-        collector_addr: deps.api.human_address(&config.collector_addr)?,
+        collector_addr: config.collector_addr,
         stable_denom: config.stable_denom,
         min_lease_blocks: config.min_lease_blocks,
         max_lease_blocks: config.max_lease_blocks,
@@ -562,77 +583,63 @@ fn query_config<S: Storage, A: Api, Q: Querier>(
     })
 }
 
-fn query_name_state<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
+fn query_name_state(
+    deps: Deps,
     name: String,
-) -> StdResult<NameStateResponse> {
-    let config = read_config(&deps.storage)?;
-    let name_state = read_name_state(&deps.storage, &name)?;
+) -> ContractResult<NameStateResponse> {
+    let config = read_config(deps.storage)?;
+    let name_state = read_name_state(deps.storage, &name)?;
 
-    let previous_owner = if name_state.previous_owner != CanonicalAddr::default() {
-        Some(deps.api.human_address(&name_state.previous_owner)?)
-    } else {
-        None
-    };
-
-    let controller = if name_state.controller != CanonicalAddr::default() {
-        Some(deps.api.human_address(&name_state.controller)?)
-    } else {
-        None
-    };
+    let counter_delay_end = name_state.counter_delay_end(&config);
+    let transition_delay_end = name_state.transition_delay_end(&config);
+    let bid_delay_end = name_state.bid_delay_end(&config);
+    let expire_block = name_state.expire_block();
 
     Ok(NameStateResponse {
-        owner: deps.api.human_address(&name_state.owner)?,
-        controller,
+        owner: name_state.owner,
+        controller: name_state.controller,
         rate: name_state.rate,
         begin_block: name_state.begin_block,
         begin_deposit: name_state.begin_deposit,
-        previous_owner,
-        counter_delay_end: name_state.counter_delay_end(&config),
-        transition_delay_end: name_state.transition_delay_end(&config),
-        bid_delay_end: name_state.bid_delay_end(&config),
-        expire_block: name_state.expire_block(),
+        previous_owner: name_state.previous_owner,
+        counter_delay_end,
+        transition_delay_end,
+        bid_delay_end,
+        expire_block,
     })
 }
 
-fn query_all_name_states<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
+fn query_all_name_states(
+    deps: Deps,
     start_after: Option<String>,
     limit: Option<u32>,
-) -> StdResult<AllNameStatesResponse> {
-    let config = read_config(&deps.storage)?;
+) -> ContractResult<AllNameStatesResponse> {
+    let config = read_config(deps.storage)?;
     let name_states = collect_name_states(
-        &deps.storage,
+        deps.storage,
         start_after.as_deref(),
         limit,
     )?;
 
     let names: StdResult<Vec<NameStateItem>> = name_states.into_iter().map(|(name, name_state)| {
-        let previous_owner = if name_state.previous_owner != CanonicalAddr::default() {
-            Some(deps.api.human_address(&name_state.previous_owner)?)
-        } else {
-            None
-        };
-
-        let controller = if name_state.controller != CanonicalAddr::default() {
-            Some(deps.api.human_address(&name_state.controller)?)
-        } else {
-            None
-        };
+        let counter_delay_end = name_state.counter_delay_end(&config);
+        let transition_delay_end = name_state.transition_delay_end(&config);
+        let bid_delay_end = name_state.bid_delay_end(&config);
+        let expire_block = name_state.expire_block();
 
         Ok(NameStateItem {
             name,
             state: NameStateResponse {
-                owner: deps.api.human_address(&name_state.owner)?,
-                controller,
+                owner: name_state.owner,
+                controller: name_state.controller,
                 rate: name_state.rate,
                 begin_block: name_state.begin_block,
                 begin_deposit: name_state.begin_deposit,
-                previous_owner,
-                counter_delay_end: name_state.counter_delay_end(&config),
-                transition_delay_end: name_state.transition_delay_end(&config),
-                bid_delay_end: name_state.bid_delay_end(&config),
-                expire_block: name_state.expire_block(),
+                previous_owner: name_state.previous_owner,
+                counter_delay_end,
+                transition_delay_end,
+                bid_delay_end,
+                expire_block,
            }
         })
     }).collect();
@@ -642,10 +649,11 @@ fn query_all_name_states<S: Storage, A: Api, Q: Querier>(
     })
 }
 
-pub fn migrate<S: Storage, A: Api, Q: Querier>(
-    _deps: &mut Extern<S, A, Q>,
+#[entry_point]
+pub fn migrate(
+    _deps: DepsMut,
     _env: Env,
     _msg: MigrateMsg,
-) -> MigrateResult {
-    Ok(MigrateResponse::default())
+) -> ContractResult<Response> {
+    Ok(Response::default())
 }
