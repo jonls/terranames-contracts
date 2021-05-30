@@ -7,6 +7,7 @@ use terranames::resolver::{
 };
 
 use crate::contract::{execute, instantiate, query};
+use crate::errors::ContractError;
 use crate::mock_querier::mock_dependencies;
 
 fn default_init() -> InstantiateMsg {
@@ -199,7 +200,7 @@ fn set_value_as_other_fails() {
         name: "example".to_string(),
         value: Some("test_value".into()),
     });
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::Unauthorized { .. })));
 
     // Even if called as owner
     let mut env = mock_env();
@@ -209,7 +210,7 @@ fn set_value_as_other_fails() {
         name: "example".to_string(),
         value: Some("test_value".into()),
     });
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::Unauthorized { .. })));
 }
 
 #[test]
@@ -246,7 +247,7 @@ fn set_value_when_controller_is_none_fails() {
         name: "example".to_string(),
         value: Some("test_value".into()),
     });
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::Unauthorized { .. })));
 }
 
 #[test]
@@ -283,5 +284,5 @@ fn set_value_when_expired_fails() {
         name: "example".to_string(),
         value: Some("test_value".into()),
     });
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::NameExpired { .. })));
 }

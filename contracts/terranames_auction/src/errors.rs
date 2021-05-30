@@ -1,4 +1,4 @@
-use cosmwasm_std::{OverflowError, StdError};
+use cosmwasm_std::{OverflowError, StdError, Uint128};
 use snafu::Snafu;
 
 #[derive(Snafu, Debug)]
@@ -10,6 +10,20 @@ pub enum ContractError {
     Overflow { source: OverflowError },
     #[snafu(display("Unauthorized"))]
     Unauthorized { backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Unfunded"))]
+    Unfunded { backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Invalid Config"))]
+    InvalidConfig { backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Closed For Bids"))]
+    ClosedForBids { backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Bid rate too low (min {})", rate))]
+    BidRateTooLow { rate: Uint128, backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Bid deposit too low (min {})", deposit))]
+    BidDepositTooLow { deposit: Uint128, backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Bid has invalid block count"))]
+    BidInvalidBlockCount { backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Unexpected state"))]
+    UnexpectedState { backtrace: Option<snafu::Backtrace> },
 }
 
 impl From<StdError> for ContractError {

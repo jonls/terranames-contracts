@@ -11,6 +11,7 @@ use terraswap::asset::{Asset, AssetInfo, PairInfo};
 use terraswap::pair::ExecuteMsg as PairExecuteMsg;
 
 use crate::contract::{execute, instantiate, query};
+use crate::errors::ContractError;
 use crate::mock_querier::mock_dependencies;
 
 static ABC_COIN: &str = "uabc";
@@ -76,7 +77,7 @@ fn init_fails_without_swap_pair() {
     let info = mock_info("creator", &[]);
 
     let res = instantiate(deps.as_mut(), env, info, msg);
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::Std { .. })));
 }
 
 #[test]

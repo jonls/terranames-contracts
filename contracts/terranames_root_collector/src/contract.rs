@@ -1,7 +1,7 @@
 use cosmwasm_std::{
     attr, entry_point, from_binary, to_binary, Addr, Coin, CosmosMsg, Decimal,
     Deps, DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse, Response,
-    StdError, StdResult, Uint128, WasmMsg,
+    StdResult, Uint128, WasmMsg,
 };
 
 use cw20::{
@@ -21,7 +21,7 @@ use terraswap::pair::{
 };
 use terraswap::querier::query_pair_info;
 
-use crate::errors::{ContractError, Unauthorized};
+use crate::errors::{ContractError, InvalidConfig, Unauthorized, Unfunded};
 use crate::state::{
     read_config, read_state, store_config, store_state, Config, State,
 };
@@ -51,7 +51,7 @@ pub fn instantiate(
     msg: InstantiateMsg,
 ) -> ContractResult<Response> {
     if msg.min_token_price.is_zero() {
-        return Err(StdError::generic_err("min_token_price must be non-zero").into());
+        return InvalidConfig.fail();
     }
 
     let terranames_token = deps.api.addr_validate(&msg.terranames_token)?;
@@ -123,7 +123,7 @@ fn execute_consume_excess_stable(
         &config.stable_denom,
     )?.amount;
     if stable_balance.is_zero() {
-        return Err(StdError::generic_err("No stable coin funds exist to consume").into());
+        return Unfunded.fail();
     }
 
     // Query for the current token balance
@@ -152,14 +152,13 @@ fn execute_consume_excess_stable(
                 (pair_pool.assets[0].amount, pair_pool.assets[1].amount)
             },
             _ => {
-                return Err(StdError::generic_err("Unexpected pool data").into());
+                panic!("Unexpected pool data");
             },
         };
 
         let max_provide_stable_tax = calculate_tax(&deps.querier, &config.stable_denom, stable_to_send)?;
         let max_provide_stable = stable_to_send.checked_sub(max_provide_stable_tax)?;
-        let max_tokens_per_stable = config.min_token_price.inv()
-            .ok_or(StdError::generic_err("Invalid token price"))?;
+        let max_tokens_per_stable = config.min_token_price.inv().expect("Invalid token price");
 
         let stable_price_in_tokens = if !pool_stables.is_zero() {
             std::cmp::min(
@@ -311,7 +310,7 @@ fn execute_consume_excess_tokens(
         token_balance.u128().saturating_sub(state.initial_token_pool.u128())
     );
     if tokens_to_burn.is_zero() {
-        return Err(StdError::generic_err("No tokens exist to consume").into());
+        return Unfunded.fail();
     }
 
     Ok(Response {

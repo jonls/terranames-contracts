@@ -368,7 +368,7 @@ fn initial_bid_outside_of_allowed_block_range() {
         .deposit(deposit_amount)
         .rate(545_669)
         .execute(deps.as_mut());
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::BidInvalidBlockCount { .. })));
 
     // Lower rate is successful
     Bid::on("example_1", "bidder", bid_block)
@@ -382,7 +382,7 @@ fn initial_bid_outside_of_allowed_block_range() {
         .deposit(deposit_amount)
         .rate(54566)
         .execute(deps.as_mut());
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::BidInvalidBlockCount { .. })));
 
     // Higher rate is successful
     Bid::on("example_2", "bidder", bid_block)
@@ -419,7 +419,7 @@ fn bid_on_existing_name_as_owner() {
         .deposit(deposit_amount)
         .rate(246)
         .execute(deps.as_mut());
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::Unauthorized { .. })));
 
     // Bid on the name as the current owner after expiry. This is allowed.
     let bid_2_block: u64 = bid_1_block + 8130081;
@@ -768,7 +768,7 @@ fn fund_unclaimed_name_fails() {
         name: "example".into(),
         owner: "owner".into(),
     });
-    assert_eq!(res.is_err(), true);
+    assert!(matches!(res, Err(ContractError::Std { .. })));
 }
 
 #[test]

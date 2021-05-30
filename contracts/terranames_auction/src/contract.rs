@@ -1,7 +1,7 @@
 use cosmwasm_std::{
     attr, entry_point, to_binary, Addr, BankMsg, Coin, CosmosMsg, Deps,
-    DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse, StdError,
-    StdResult, Response, Uint128,
+    DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse, StdResult,
+    Response, Uint128,
 };
 
 use terranames::auction::{
@@ -11,7 +11,10 @@ use terranames::auction::{
 };
 use terranames::terra::deduct_coin_tax;
 
-use crate::errors::{ContractError, Unauthorized};
+use crate::errors::{
+    BidDepositTooLow, BidInvalidBlockCount, BidRateTooLow, ClosedForBids,
+    ContractError, InvalidConfig, Unauthorized, UnexpectedState, Unfunded,
+};
 use crate::state::{
     collect_name_states, read_config, read_name_state, read_option_name_state,
     store_config, store_name_state, Config, NameState, OwnerStatus,
@@ -95,7 +98,7 @@ pub fn instantiate(
     let collector_addr = deps.api.addr_validate(&msg.collector_addr)?;
 
     if !(msg.min_lease_blocks <= msg.max_lease_blocks) {
-        return Err(StdError::generic_err("Invalid min/max lease blocks").into());
+        return InvalidConfig.fail();
     }
 
     let state = Config {
@@ -189,25 +192,24 @@ fn execute_bid_existing(
     transition_reference_block: u64,
 ) -> ContractResult<Response> {
     if info.sender == name_state.owner {
-        return Err(StdError::generic_err("Cannot bid as current owner").into());
+        return Unauthorized.fail();
     }
 
     let blocks_spent_since_bid = match name_state.blocks_spent_since_bid(env.block.height) {
         Some(blocks_spent) => blocks_spent,
-        None => return Err(StdError::generic_err("Invalid block height").into())
+        None => panic!("Invalid block height"),
     };
 
     if blocks_spent_since_bid >= config.counter_delay_blocks &&
             blocks_spent_since_bid < config.counter_delay_blocks + config.bid_delay_blocks &&
             !name_state.rate.is_zero() {
-        return Err(StdError::generic_err("Unable to bid in the current block").into());
+        return ClosedForBids.fail();
     }
 
     if rate <= name_state.rate {
-        return Err(StdError::generic_err(format!(
-            "Bid rate must be greater than {} {}",
-            name_state.rate, config.stable_denom,
-        )).into());
+        return BidRateTooLow {
+            rate: name_state.rate,
+        }.fail();
     }
 
     let msg_deposit = get_sent_funds(&info, &config.stable_denom);
@@ -215,10 +217,9 @@ fn execute_bid_existing(
     let deposit_left = name_state.begin_deposit.saturating_sub(deposit_spent);
 
     if msg_deposit <= deposit_left {
-        return Err(StdError::generic_err(format!(
-            "Deposit must be greater than {} {}",
-            deposit_left, config.stable_denom,
-        )).into())
+        return BidDepositTooLow {
+            deposit: deposit_left,
+        }.fail();
     }
 
     // TODO I'm uncertain if these limits are necessary though they may be good
@@ -229,9 +230,7 @@ fn execute_bid_existing(
     let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
     let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
-        return Err(StdError::generic_err(
-            "Deposit is outside of the allowed range",
-        ).into());
+        return BidInvalidBlockCount.fail();
     }
 
     let previous_bidder = name_state.owner;
@@ -320,9 +319,7 @@ fn execute_bid_new(
     let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
     let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
-        return Err(StdError::generic_err(
-            "Deposit is outside of the allowed range",
-        ).into());
+        return BidInvalidBlockCount.fail();
     }
 
     let name_state = NameState {
@@ -379,22 +376,18 @@ fn execute_fund(
     let mut name_state = read_name_state(deps.storage, &name)?;
 
     if msg_deposit.is_zero() {
-        return Err(StdError::generic_err("Fund deposit is zero").into());
+        return Unfunded.fail();
     }
 
     let owner_canonical = owner;
     if name_state.owner != owner_canonical {
-        return Err(StdError::generic_err("Owner does not match expectation").into());
+        return UnexpectedState.fail();
     }
 
     let combined_deposit = msg_deposit + name_state.begin_deposit;
     let max_deposit = name_state.max_allowed_deposit(&config, env.block.height);
     if combined_deposit > max_deposit {
-        return Err(StdError::generic_err(format!(
-            "Deposit outside of allowed range, max allowed additional: {} {}",
-            max_deposit.saturating_sub(name_state.begin_deposit),
-            config.stable_denom,
-        )).into());
+        return BidInvalidBlockCount.fail();
     }
 
     name_state.begin_deposit = combined_deposit;
@@ -449,9 +442,7 @@ fn execute_set_rate(
     let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
 
     if new_deposit < min_deposit || new_deposit > max_deposit {
-        return Err(StdError::generic_err(
-            "Rate results in a lease outside of the allowed block range"
-        ).into());
+        return BidInvalidBlockCount.fail();
     }
 
     name_state.rate = rate;
