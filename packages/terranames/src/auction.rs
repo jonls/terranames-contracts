@@ -2,8 +2,10 @@ use cosmwasm_std::{Addr, Uint128};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Rate is provided as number of stablecoins per this number of blocks
-pub const RATE_BLOCK_DENOM: u64 = 1_000_000;
+use crate::utils::{Timedelta, Timestamp};
+
+/// Rate is provided as number of stablecoins per day
+pub const RATE_SEC_DENOM: Timedelta = Timedelta::from_seconds(24 * 60 * 60);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
@@ -11,16 +13,16 @@ pub struct InstantiateMsg {
     pub collector_addr: String,
     /// Stablecoin denomination
     pub stable_denom: String,
-    /// Minimum number of blocks to allow bidding for
-    pub min_lease_blocks: u64,
-    /// Maximum number of blocks to allow bidding for at once
-    pub max_lease_blocks: u64,
-    /// Number of blocks to allow counter-bids
-    pub counter_delay_blocks: u64,
-    /// Number of transition delay blocks after successful counter-bid
-    pub transition_delay_blocks: u64,
-    /// Number of blocks until a new bid can start
-    pub bid_delay_blocks: u64,
+    /// Minimum number of seconds to allow bidding for
+    pub min_lease_secs: Timedelta,
+    /// Maximum number of seconds to allow bidding for at once
+    pub max_lease_secs: Timedelta,
+    /// Number of seconds to allow counter-bids
+    pub counter_delay_secs: Timedelta,
+    /// Number of transition delay seconds after successful counter-bid
+    pub transition_delay_secs: Timedelta,
+    /// Number of seconds until a new bid can start
+    pub bid_delay_secs: Timedelta,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -83,16 +85,16 @@ pub struct ConfigResponse {
     pub collector_addr: Addr,
     /// Stablecoin denomination
     pub stable_denom: String,
-    /// Minimum number of blocks to allow bidding for
-    pub min_lease_blocks: u64,
-    /// Maximum number of blocks to allow bidding for at once
-    pub max_lease_blocks: u64,
-    /// Number of blocks to allow counter-bids
-    pub counter_delay_blocks: u64,
-    /// Number of transition delay blocks after successful counter-bid
-    pub transition_delay_blocks: u64,
-    /// Number of blocks until a new bid can start
-    pub bid_delay_blocks: u64,
+    /// Minimum number of seconds to allow bidding for
+    pub min_lease_secs: Timedelta,
+    /// Maximum number of seconds to allow bidding for at once
+    pub max_lease_secs: Timedelta,
+    /// Number of seconds to allow counter-bids
+    pub counter_delay_secs: Timedelta,
+    /// Number of transition delay seconds after successful counter-bid
+    pub transition_delay_secs: Timedelta,
+    /// Number of seconds until a new bid can start
+    pub bid_delay_secs: Timedelta,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -102,24 +104,24 @@ pub struct NameStateResponse {
     /// Controller of the name
     pub controller: Option<Addr>,
 
-    /// Amount of stablecoin per RATE_BLOCK_DENOM charged
+    /// Amount of stablecoin per RATE_SEC_DENOM charged
     pub rate: Uint128,
-    /// Block height when lease begun
-    pub begin_block: u64,
+    /// Timestamp in seconds when lease begun
+    pub begin_time: Timestamp,
     /// Deposit when lease begun
     pub begin_deposit: Uint128,
 
     /// Previous owner
     pub previous_owner: Option<Addr>,
 
-    /// Counter-delay block end
-    pub counter_delay_end: u64,
-    /// Transition-delay block end
-    pub transition_delay_end: u64,
-    /// Bid-delay block end
-    pub bid_delay_end: u64,
-    /// Expire block
-    pub expire_block: Option<u64>,
+    /// Counter-delay end timestamp
+    pub counter_delay_end: Timestamp,
+    /// Transition-delay end timestamp
+    pub transition_delay_end: Timestamp,
+    /// Bid-delay end timestamp
+    pub bid_delay_end: Timestamp,
+    /// Expire timestamp
+    pub expire_time: Option<Timestamp>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -133,26 +135,26 @@ pub struct AllNameStatesResponse {
     pub names: Vec<NameStateItem>,
 }
 
-/// Return deposit needed for blocks and rate rounded down.
+/// Return deposit needed for seconds and rate rounded down.
 ///
 /// Rounded down to nearest raw unit (e.g. to 1 uusd NOT 1 whole usd).
-pub fn deposit_from_blocks_floor(blocks: u64, rate: Uint128) -> Uint128 {
-    rate.multiply_ratio(blocks, RATE_BLOCK_DENOM)
+pub fn deposit_from_seconds_floor(seconds: Timedelta, rate: Uint128) -> Uint128 {
+    rate.multiply_ratio(seconds, RATE_SEC_DENOM)
 }
 
-/// Return deposit needed for blocks and rate rounded up.
+/// Return deposit needed for seconds and rate rounded up.
 ///
 /// Rounded up to nearest raw unit (e.g. to 1 uusd NOT 1 whole usd).
-pub fn deposit_from_blocks_ceil(blocks: u64, rate: Uint128) -> Uint128 {
-    let a = blocks as u128 * rate.u128() + RATE_BLOCK_DENOM as u128 - 1;
-    Uint128::from(1u64).multiply_ratio(a, RATE_BLOCK_DENOM)
+pub fn deposit_from_seconds_ceil(seconds: Timedelta, rate: Uint128) -> Uint128 {
+    let a: u128 = (seconds.value() as u128) * rate.u128() + (RATE_SEC_DENOM.value() as u128) - 1;
+    Uint128::from(1u64).multiply_ratio(a, RATE_SEC_DENOM)
 }
 
-/// Return number of blocks corresponding to deposit and rate
-pub fn blocks_from_deposit(deposit: Uint128, rate: Uint128) -> Option<u64> {
+/// Return number of seconds corresponding to deposit and rate
+pub fn seconds_from_deposit(deposit: Uint128, rate: Uint128) -> Option<Timedelta> {
     if rate.is_zero() {
         None
     } else {
-        Some((deposit.multiply_ratio(RATE_BLOCK_DENOM, rate)).u128() as u64)
+        Some(Timedelta::from_seconds(deposit.multiply_ratio(RATE_SEC_DENOM, rate).u128() as u64))
     }
 }

@@ -5,6 +5,8 @@ use terranames::auction::NameStateResponse;
 use terranames::resolver::{
     ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg, ResolveNameResponse,
 };
+use terranames::testing::helpers::EnvBuilder;
+use terranames::utils::Timestamp;
 
 use crate::contract::{execute, instantiate, query};
 use crate::errors::ContractError;
@@ -49,19 +51,18 @@ fn set_value_to_string() {
         owner: Addr::unchecked("owner"),
         controller: Some(Addr::unchecked("controller")),
         rate: Uint128::from(100u64),
-        begin_block: 100_000,
+        begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::from(1000u64),
 
         previous_owner: None,
 
-        counter_delay_end: 110000,
-        transition_delay_end: 130000,
-        bid_delay_end: 2000000,
-        expire_block: Some(10_100_000),
+        counter_delay_end: Timestamp::from_seconds(110000),
+        transition_delay_end: Timestamp::from_seconds(130000),
+        bid_delay_end: Timestamp::from_seconds(2000000),
+        expire_time: Some(Timestamp::from_seconds(10_100_000)),
     });
 
-    let mut env = mock_env();
-    env.block.height = 123456;
+    let env = mock_env().at_time(123456);
     let info = mock_info("controller", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameValue {
         name: "example".to_string(),
@@ -75,7 +76,7 @@ fn set_value_to_string() {
     }).unwrap();
     let resolved: ResolveNameResponse = from_binary(&res).unwrap();
     assert_eq!(resolved.value, Some("test_value".into()));
-    assert_eq!(resolved.expire_block, Some(10_100_000));
+    assert_eq!(resolved.expire_time, Some(Timestamp::from_seconds(10_100_000)));
 }
 
 #[test]
@@ -93,19 +94,18 @@ fn set_value_to_none() {
         owner: Addr::unchecked("owner"),
         controller: Some(Addr::unchecked("controller")),
         rate: Uint128::from(100u64),
-        begin_block: 100_000,
+        begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::from(1000u64),
 
         previous_owner: None,
 
-        counter_delay_end: 110000,
-        transition_delay_end: 130000,
-        bid_delay_end: 2000000,
-        expire_block: Some(10_100_000),
+        counter_delay_end: Timestamp::from_seconds(110000),
+        transition_delay_end: Timestamp::from_seconds(130000),
+        bid_delay_end: Timestamp::from_seconds(2000000),
+        expire_time: Some(Timestamp::from_seconds(10_100_000)),
     });
 
-    let mut env = mock_env();
-    env.block.height = 123456;
+    let env = mock_env().at_time(123456);
     let info = mock_info("controller", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameValue {
         name: "example".to_string(),
@@ -119,7 +119,7 @@ fn set_value_to_none() {
     }).unwrap();
     let resolved: ResolveNameResponse = from_binary(&res).unwrap();
     assert_eq!(resolved.value, None);
-    assert_eq!(resolved.expire_block, Some(10_100_000));
+    assert_eq!(resolved.expire_time, Some(Timestamp::from_seconds(10_100_000)));
 }
 
 #[test]
@@ -137,19 +137,18 @@ fn set_value_for_zero_bid() {
         owner: Addr::unchecked("owner"),
         controller: Some(Addr::unchecked("controller")),
         rate: Uint128::zero(),
-        begin_block: 100_000,
+        begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::zero(),
 
         previous_owner: None,
 
-        counter_delay_end: 110000,
-        transition_delay_end: 130000,
-        bid_delay_end: 100_000,
-        expire_block: None,
+        counter_delay_end: Timestamp::from_seconds(110000),
+        transition_delay_end: Timestamp::from_seconds(130000),
+        bid_delay_end: Timestamp::from_seconds(100_000),
+        expire_time: None,
     });
 
-    let mut env = mock_env();
-    env.block.height = 123456;
+    let env = mock_env().at_time(123456);
     let info = mock_info("controller", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameValue {
         name: "example".to_string(),
@@ -163,7 +162,7 @@ fn set_value_for_zero_bid() {
     }).unwrap();
     let resolved: ResolveNameResponse = from_binary(&res).unwrap();
     assert_eq!(resolved.value, Some("test_value".into()));
-    assert_eq!(resolved.expire_block, None);
+    assert_eq!(resolved.expire_time, None);
 }
 
 #[test]
@@ -181,20 +180,19 @@ fn set_value_as_other_fails() {
         owner: Addr::unchecked("owner"),
         controller: Some(Addr::unchecked("controller")),
         rate: Uint128::zero(),
-        begin_block: 100_000,
+        begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::zero(),
 
         previous_owner: None,
 
-        counter_delay_end: 110000,
-        transition_delay_end: 130000,
-        bid_delay_end: 100_000,
-        expire_block: None,
+        counter_delay_end: Timestamp::from_seconds(110000),
+        transition_delay_end: Timestamp::from_seconds(130000),
+        bid_delay_end: Timestamp::from_seconds(100_000),
+        expire_time: None,
     });
 
     // Fails when called as other sender
-    let mut env = mock_env();
-    env.block.height = 123456;
+    let env = mock_env().at_time(123456);
     let info = mock_info("other", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameValue {
         name: "example".to_string(),
@@ -203,8 +201,7 @@ fn set_value_as_other_fails() {
     assert!(matches!(res, Err(ContractError::Unauthorized { .. })));
 
     // Even if called as owner
-    let mut env = mock_env();
-    env.block.height = 123456;
+    let env = mock_env().at_time(123456);
     let info = mock_info("owner", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameValue {
         name: "example".to_string(),
@@ -228,20 +225,19 @@ fn set_value_when_controller_is_none_fails() {
         owner: Addr::unchecked("owner"),
         controller: None,
         rate: Uint128::zero(),
-        begin_block: 100_000,
+        begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::zero(),
 
         previous_owner: None,
 
-        counter_delay_end: 110_000,
-        transition_delay_end: 130_000,
-        bid_delay_end: 100_000,
-        expire_block: None,
+        counter_delay_end: Timestamp::from_seconds(110_000),
+        transition_delay_end: Timestamp::from_seconds(130_000),
+        bid_delay_end: Timestamp::from_seconds(100_000),
+        expire_time: None,
     });
 
     // Fails when called as any sender
-    let mut env = mock_env();
-    env.block.height = 123456;
+    let env = mock_env().at_time(123456);
     let info = mock_info("owner", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameValue {
         name: "example".to_string(),
@@ -265,20 +261,19 @@ fn set_value_when_expired_fails() {
         owner: Addr::unchecked("owner"),
         controller: Some(Addr::unchecked("controller")),
         rate: Uint128::from(100u64),
-        begin_block: 100_000,
+        begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::from(1000u64),
 
         previous_owner: None,
 
-        counter_delay_end: 110_000,
-        transition_delay_end: 130_000,
-        bid_delay_end: 2000000,
-        expire_block: Some(10_100_000),
+        counter_delay_end: Timestamp::from_seconds(110_000),
+        transition_delay_end: Timestamp::from_seconds(130_000),
+        bid_delay_end: Timestamp::from_seconds(2000000),
+        expire_time: Some(Timestamp::from_seconds(10_100_000)),
     });
 
     // Fails when called after expiration
-    let mut env = mock_env();
-    env.block.height = 10_100_000;
+    let env = mock_env().at_time(10_100_000);
     let info = mock_info("controller", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameValue {
         name: "example".to_string(),

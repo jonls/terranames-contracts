@@ -8,6 +8,7 @@ use terranames::resolver::{
     ConfigResponse, InstantiateMsg, ExecuteMsg, MigrateMsg, QueryMsg,
     ResolveNameResponse,
 };
+use terranames::utils::Timestamp;
 
 use crate::errors::{ContractError, NameExpired, Unauthorized};
 use crate::state::{
@@ -71,8 +72,8 @@ fn execute_set_value(
         return Unauthorized.fail();
     }
 
-    if let Some(expire_block) = name_state.expire_block {
-        if env.block.height >= expire_block {
+    if let Some(expire_time) = name_state.expire_time {
+        if Timestamp::from(env.block.time) >= expire_time {
             return NameExpired.fail();
         }
     }
@@ -136,7 +137,7 @@ fn query_resolve(
 
     Ok(ResolveNameResponse {
         value: name_value,
-        expire_block: name_state.expire_block,
+        expire_time: name_state.expire_time,
     })
 }
 

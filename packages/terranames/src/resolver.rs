@@ -2,6 +2,8 @@ use cosmwasm_std::Addr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::utils::Timestamp;
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
     // Auction contract handling ownership
@@ -42,6 +44,6 @@ pub struct ConfigResponse {
 pub struct ResolveNameResponse {
     /// Value that the name resolved to
     pub value: Option<String>,
-    /// Block height when value expires
-    pub expire_block: Option<u64>,
+    /// Timestamp when value expires
+    pub expire_time: Option<Timestamp>,
 }

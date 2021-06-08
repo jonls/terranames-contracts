@@ -20,8 +20,8 @@ pub enum ContractError {
     BidRateTooLow { rate: Uint128, backtrace: Option<snafu::Backtrace> },
     #[snafu(display("Bid deposit too low (min {})", deposit))]
     BidDepositTooLow { deposit: Uint128, backtrace: Option<snafu::Backtrace> },
-    #[snafu(display("Bid has invalid block count"))]
-    BidInvalidBlockCount { backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Bid has invalid interval"))]
+    BidInvalidInterval { backtrace: Option<snafu::Backtrace> },
     #[snafu(display("Unexpected state"))]
     UnexpectedState { backtrace: Option<snafu::Backtrace> },
 }

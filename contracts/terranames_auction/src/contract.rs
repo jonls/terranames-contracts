@@ -5,14 +5,15 @@ use cosmwasm_std::{
 };
 
 use terranames::auction::{
-    deposit_from_blocks_ceil, deposit_from_blocks_floor, ConfigResponse,
+    deposit_from_seconds_ceil, deposit_from_seconds_floor, ConfigResponse,
     AllNameStatesResponse, ExecuteMsg, InstantiateMsg, MigrateMsg,
     NameStateItem, NameStateResponse, QueryMsg,
 };
 use terranames::terra::deduct_coin_tax;
+use terranames::utils::Timestamp;
 
 use crate::errors::{
-    BidDepositTooLow, BidInvalidBlockCount, BidRateTooLow, ClosedForBids,
+    BidDepositTooLow, BidInvalidInterval, BidRateTooLow, ClosedForBids,
     ContractError, InvalidConfig, Unauthorized, UnexpectedState, Unfunded,
 };
 use crate::state::{
@@ -97,18 +98,18 @@ pub fn instantiate(
 ) -> ContractResult<Response> {
     let collector_addr = deps.api.addr_validate(&msg.collector_addr)?;
 
-    if !(msg.min_lease_blocks <= msg.max_lease_blocks) {
+    if !(msg.min_lease_secs <= msg.max_lease_secs) {
         return InvalidConfig.fail();
     }
 
     let state = Config {
         collector_addr,
         stable_denom: msg.stable_denom,
-        min_lease_blocks: msg.min_lease_blocks,
-        max_lease_blocks: msg.max_lease_blocks,
-        counter_delay_blocks: msg.counter_delay_blocks,
-        transition_delay_blocks: msg.transition_delay_blocks,
-        bid_delay_blocks: msg.bid_delay_blocks,
+        min_lease_secs: msg.min_lease_secs,
+        max_lease_secs: msg.max_lease_secs,
+        counter_delay_secs: msg.counter_delay_secs,
+        transition_delay_secs: msg.transition_delay_secs,
+        bid_delay_secs: msg.bid_delay_secs,
     };
 
     store_config(deps.storage, &state)?;
@@ -154,29 +155,29 @@ fn execute_bid(
 ) -> ContractResult<Response> {
     if let Some(name_state) = read_option_name_state(deps.storage, &name)? {
         let config = read_config(deps.storage)?;
-        let owner_status = name_state.owner_status(&config, env.block.height);
+        let owner_status = name_state.owner_status(&config, env.block.time.into());
         match owner_status {
-            OwnerStatus::Valid { owner, transition_reference_block } |
-            OwnerStatus::TransitionDelay { owner, transition_reference_block } => {
+            OwnerStatus::Valid { owner, transition_reference_time } |
+            OwnerStatus::TransitionDelay { owner, transition_reference_time } => {
                 execute_bid_existing(
                     deps, env, info, name, rate, config, name_state, Some(owner),
-                    transition_reference_block,
+                    transition_reference_time,
                 )
             },
-            OwnerStatus::CounterDelay { name_owner: owner, transition_reference_block, .. } => {
+            OwnerStatus::CounterDelay { name_owner: owner, transition_reference_time, .. } => {
                 execute_bid_existing(
                     deps, env, info, name, rate, config, name_state, owner,
-                    transition_reference_block,
+                    transition_reference_time,
                 )
             },
-            OwnerStatus::Expired { expire_block, .. } => {
+            OwnerStatus::Expired { expire_time, .. } => {
                 execute_bid_new(
-                    deps, env, info, name, rate, expire_block,
+                    deps, env, info, name, rate, expire_time,
                 )
             },
         }
     } else {
-        execute_bid_new(deps, env, info, name, rate, 0)
+        execute_bid_new(deps, env, info, name, rate, Timestamp::zero())
     }
 }
 
@@ -189,19 +190,19 @@ fn execute_bid_existing(
     config: Config,
     mut name_state: NameState,
     owner: Option<Addr>,
-    transition_reference_block: u64,
+    transition_reference_time: Timestamp,
 ) -> ContractResult<Response> {
     if info.sender == name_state.owner {
         return Unauthorized.fail();
     }
 
-    let blocks_spent_since_bid = match name_state.blocks_spent_since_bid(env.block.height) {
-        Some(blocks_spent) => blocks_spent,
-        None => panic!("Invalid block height"),
+    let seconds_spent_since_bid = match name_state.seconds_spent_since_bid(env.block.time.into()) {
+        Some(seconds_spent) => seconds_spent,
+        None => panic!("Invalid block time"),
     };
 
-    if blocks_spent_since_bid >= config.counter_delay_blocks &&
-            blocks_spent_since_bid < config.counter_delay_blocks + config.bid_delay_blocks &&
+    if seconds_spent_since_bid >= config.counter_delay_secs &&
+            seconds_spent_since_bid < config.counter_delay_secs + config.bid_delay_secs &&
             !name_state.rate.is_zero() {
         return ClosedForBids.fail();
     }
@@ -213,7 +214,7 @@ fn execute_bid_existing(
     }
 
     let msg_deposit = get_sent_funds(&info, &config.stable_denom);
-    let deposit_spent = deposit_from_blocks_ceil(blocks_spent_since_bid, name_state.rate);
+    let deposit_spent = deposit_from_seconds_ceil(seconds_spent_since_bid, name_state.rate);
     let deposit_left = name_state.begin_deposit.saturating_sub(deposit_spent);
 
     if msg_deposit <= deposit_left {
@@ -225,29 +226,29 @@ fn execute_bid_existing(
     // TODO I'm uncertain if these limits are necessary though they may be good
     // to have as very wide ranges to avoid unpredictable edge cases near the
     // edges. The lower limit probably needs to be at least
-    // counter_delay_blocks to avoid an attack where a name is bid on with a
+    // counter_delay_secs to avoid an attack where a name is bid on with a
     // very short time to expiry then the rate resets after expiry.
-    let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
-    let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
+    let min_deposit = deposit_from_seconds_ceil(config.min_lease_secs, rate);
+    let max_deposit = deposit_from_seconds_floor(config.max_lease_secs, rate);
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
-        return BidInvalidBlockCount.fail();
+        return BidInvalidInterval.fail();
     }
 
     let previous_bidder = name_state.owner;
 
     name_state.previous_owner = owner.clone();
-    name_state.previous_transition_reference_block = transition_reference_block;
+    name_state.previous_transition_reference_time = transition_reference_time;
     name_state.owner = info.sender.clone();
     name_state.rate = rate;
-    name_state.begin_block = env.block.height;
+    name_state.begin_time = env.block.time.into();
     name_state.begin_deposit = msg_deposit;
 
-    // Only update transition reference block if ownership is assigned to a new
+    // Only update transition reference time if ownership is assigned to a new
     // owner.
     if Some(name_state.owner.clone()) != owner {
-        name_state.transition_reference_block = env.block.height;
+        name_state.transition_reference_time = env.block.time.into();
     } else {
-        name_state.transition_reference_block = name_state.previous_transition_reference_block;
+        name_state.transition_reference_time = name_state.previous_transition_reference_time;
     }
 
     store_name_state(deps.storage, &name, &name_state)?;
@@ -310,29 +311,29 @@ fn execute_bid_new(
     info: MessageInfo,
     name: String,
     rate: Uint128,
-    transition_reference_block: u64,
+    transition_reference_time: Timestamp,
 ) -> ContractResult<Response> {
     let config = read_config(deps.storage)?;
     let msg_deposit = get_sent_funds(&info, &config.stable_denom);
-    let begin_block = env.block.height;
+    let begin_time = env.block.time.into();
 
-    let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
-    let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
+    let min_deposit = deposit_from_seconds_ceil(config.min_lease_secs, rate);
+    let max_deposit = deposit_from_seconds_floor(config.max_lease_secs, rate);
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
-        return BidInvalidBlockCount.fail();
+        return BidInvalidInterval.fail();
     }
 
     let name_state = NameState {
         owner: info.sender.clone(),
         controller: None,
-        transition_reference_block,
+        transition_reference_time,
 
-        begin_block: begin_block,
+        begin_time,
         begin_deposit: msg_deposit,
-        rate: rate,
+        rate,
 
         previous_owner: None,
-        previous_transition_reference_block: 0,
+        previous_transition_reference_time: Timestamp::zero(),
     };
     store_name_state(deps.storage, &name, &name_state)?;
 
@@ -385,9 +386,9 @@ fn execute_fund(
     }
 
     let combined_deposit = msg_deposit + name_state.begin_deposit;
-    let max_deposit = name_state.max_allowed_deposit(&config, env.block.height);
+    let max_deposit = name_state.max_allowed_deposit(&config, env.block.time.into());
     if combined_deposit > max_deposit {
-        return BidInvalidBlockCount.fail();
+        return BidInvalidInterval.fail();
     }
 
     name_state.begin_deposit = combined_deposit;
@@ -427,29 +428,29 @@ fn execute_set_rate(
     let config = read_config(deps.storage)?;
     let mut name_state = read_name_state(deps.storage, &name)?;
     let sender_canonical = info.sender;
-    let owner_status = name_state.owner_status(&config, env.block.height);
+    let owner_status = name_state.owner_status(&config, env.block.time.into());
 
     if !owner_status.can_set_rate(&sender_canonical) {
         return Unauthorized.fail();
     }
 
     // Always round up spent deposit to avoid charging too little.
-    let blocks_spent = env.block.height - name_state.begin_block;
-    let spent_deposit = deposit_from_blocks_ceil(blocks_spent, name_state.rate);
+    let seconds_spent = Timestamp::from(env.block.time).checked_sub(name_state.begin_time)?;
+    let spent_deposit = deposit_from_seconds_ceil(seconds_spent, name_state.rate);
     let new_deposit = name_state.begin_deposit.saturating_sub(spent_deposit); // TODO <-- add test for this: last block spends slightly more than total deposit
 
-    let min_deposit = deposit_from_blocks_ceil(config.min_lease_blocks, rate);
-    let max_deposit = deposit_from_blocks_floor(config.max_lease_blocks, rate);
+    let min_deposit = deposit_from_seconds_ceil(config.min_lease_secs, rate);
+    let max_deposit = deposit_from_seconds_floor(config.max_lease_secs, rate);
 
     if new_deposit < min_deposit || new_deposit > max_deposit {
-        return BidInvalidBlockCount.fail();
+        return BidInvalidInterval.fail();
     }
 
     name_state.rate = rate;
-    name_state.begin_block = env.block.height;
+    name_state.begin_time = env.block.time.into();
     name_state.begin_deposit = new_deposit;
     name_state.previous_owner = Some(name_state.owner.clone());
-    name_state.previous_transition_reference_block = name_state.transition_reference_block;
+    name_state.previous_transition_reference_time = name_state.transition_reference_time;
     store_name_state(deps.storage, &name, &name_state)?;
 
     Ok(Response {
@@ -474,7 +475,7 @@ fn execute_transfer_owner(
     let config = read_config(deps.storage)?;
     let mut name_state = read_name_state(deps.storage, &name)?;
     let sender_canonical = info.sender;
-    let owner_status = name_state.owner_status(&config, env.block.height);
+    let owner_status = name_state.owner_status(&config, env.block.time.into());
 
     let new_owner = to;
 
@@ -519,7 +520,7 @@ fn execute_set_controller(
     let config = read_config(deps.storage)?;
     let mut name_state = read_name_state(deps.storage, &name)?;
     let sender_canonical = info.sender;
-    let owner_status = name_state.owner_status(&config, env.block.height);
+    let owner_status = name_state.owner_status(&config, env.block.time.into());
 
     if !owner_status.can_set_controller(&sender_canonical) {
         return Unauthorized.fail();
@@ -566,11 +567,11 @@ fn query_config(
     Ok(ConfigResponse {
         collector_addr: config.collector_addr,
         stable_denom: config.stable_denom,
-        min_lease_blocks: config.min_lease_blocks,
-        max_lease_blocks: config.max_lease_blocks,
-        counter_delay_blocks: config.counter_delay_blocks,
-        transition_delay_blocks: config.transition_delay_blocks,
-        bid_delay_blocks: config.bid_delay_blocks,
+        min_lease_secs: config.min_lease_secs,
+        max_lease_secs: config.max_lease_secs,
+        counter_delay_secs: config.counter_delay_secs,
+        transition_delay_secs: config.transition_delay_secs,
+        bid_delay_secs: config.bid_delay_secs,
     })
 }
 
@@ -584,19 +585,19 @@ fn query_name_state(
     let counter_delay_end = name_state.counter_delay_end(&config);
     let transition_delay_end = name_state.transition_delay_end(&config);
     let bid_delay_end = name_state.bid_delay_end(&config);
-    let expire_block = name_state.expire_block();
+    let expire_time = name_state.expire_time();
 
     Ok(NameStateResponse {
         owner: name_state.owner,
         controller: name_state.controller,
         rate: name_state.rate,
-        begin_block: name_state.begin_block,
+        begin_time: name_state.begin_time,
         begin_deposit: name_state.begin_deposit,
         previous_owner: name_state.previous_owner,
         counter_delay_end,
         transition_delay_end,
         bid_delay_end,
-        expire_block,
+        expire_time,
     })
 }
 
@@ -616,7 +617,7 @@ fn query_all_name_states(
         let counter_delay_end = name_state.counter_delay_end(&config);
         let transition_delay_end = name_state.transition_delay_end(&config);
         let bid_delay_end = name_state.bid_delay_end(&config);
-        let expire_block = name_state.expire_block();
+        let expire_time = name_state.expire_time();
 
         Ok(NameStateItem {
             name,
@@ -624,13 +625,13 @@ fn query_all_name_states(
                 owner: name_state.owner,
                 controller: name_state.controller,
                 rate: name_state.rate,
-                begin_block: name_state.begin_block,
+                begin_time: name_state.begin_time,
                 begin_deposit: name_state.begin_deposit,
                 previous_owner: name_state.previous_owner,
                 counter_delay_end,
                 transition_delay_end,
                 bid_delay_end,
-                expire_block,
+                expire_time,
            }
         })
     }).collect();

@@ -1,7 +1,7 @@
 use cosmwasm_std::{
     attr, entry_point, from_binary, to_binary, Addr, Coin, CosmosMsg, Decimal,
-    Deps, DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse, Response,
-    StdResult, Uint128, WasmMsg,
+    Deps, DepsMut, Env, Fraction, MessageInfo, QuerierWrapper, QueryResponse,
+    Response, StdResult, Uint128, WasmMsg,
 };
 
 use cw20::{
@@ -13,7 +13,6 @@ use terranames::root_collector::{
     StateResponse, QueryMsg,
 };
 use terranames::terra::{calculate_added_tax, calculate_tax, deduct_tax};
-use terranames::utils::FractionInv;
 use terraswap::asset::{Asset, AssetInfo};
 use terraswap::pair::{
     ExecuteMsg as PairHandleMsg, QueryMsg as PairQueryMsg,

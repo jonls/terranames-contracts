@@ -6,7 +6,8 @@ use cosmwasm_storage::{
     bucket, bucket_read, singleton, singleton_read,
 };
 
-use terranames::auction::{blocks_from_deposit, deposit_from_blocks_floor};
+use terranames::auction::{seconds_from_deposit, deposit_from_seconds_floor};
+use terranames::utils::{Timedelta, Timestamp};
 
 pub static CONFIG_KEY: &[u8] = b"config";
 pub static NAME_STATE_PREFIX: &[u8] = b"name";
@@ -28,16 +29,16 @@ pub struct Config {
     pub collector_addr: Addr,
     /// Stablecoin denomination
     pub stable_denom: String,
-    /// Minimum number of blocks to allow bidding for
-    pub min_lease_blocks: u64,
-    /// Maximum number of blocks to allow bidding for at once
-    pub max_lease_blocks: u64,
-    /// Number of blocks to allow counter-bids
-    pub counter_delay_blocks: u64,
-    /// Number of transition delay blocks after successful counter-bid
-    pub transition_delay_blocks: u64,
-    /// Number of blocks until a new bid can start
-    pub bid_delay_blocks: u64,
+    /// Minimum number of seconds to allow bidding for
+    pub min_lease_secs: Timedelta,
+    /// Maximum number of seconds to allow bidding for at once
+    pub max_lease_secs: Timedelta,
+    /// Number of seconds to allow counter-bids
+    pub counter_delay_secs: Timedelta,
+    /// Number of transition delay seconds after successful counter-bid
+    pub transition_delay_secs: Timedelta,
+    /// Number of seconds until a new bid can start
+    pub bid_delay_secs: Timedelta,
 }
 
 pub fn read_config(storage: &dyn Storage) -> StdResult<Config> {
@@ -58,130 +59,122 @@ pub struct NameState {
     pub owner: Addr,
     /// Controller of the name
     pub controller: Option<Addr>,
-    /// Block height from where transition delay is calculated from
-    pub transition_reference_block: u64,
+    /// Timestamp from where transition delay is calculated from
+    pub transition_reference_time: Timestamp,
 
-    /// Amount of stablecoin per RATE_BLOCK_DENOM charged
+    /// Amount of stablecoin per RATE_SEC_DENOM charged
     pub rate: Uint128,
-    /// Block height when lease begun
-    pub begin_block: u64,
+    /// Timestamp when lease begun
+    pub begin_time: Timestamp,
     /// Deposit when lease begun
     pub begin_deposit: Uint128,
 
     /// Previous owner
     pub previous_owner: Option<Addr>,
-    /// Previous transition reference block
-    pub previous_transition_reference_block: u64,
+    /// Previous transition reference timestamp
+    pub previous_transition_reference_time: Timestamp,
 }
 
 impl NameState {
-    /// Return blocks spent since bid was won
-    pub fn blocks_spent_since_bid(&self, block_height: u64) -> Option<u64> {
-        if block_height >= self.begin_block {
-            Some(block_height - self.begin_block)
-        } else {
-            None
-        }
+    /// Return seconds spent since bid was won
+    pub fn seconds_spent_since_bid(&self, current_time: Timestamp) -> Option<Timedelta> {
+        current_time.checked_sub(self.begin_time).ok()
     }
 
-    /// Return blocks spent since transition from previous owner
-    pub fn blocks_spent_since_transition(&self, block_height: u64) -> Option<u64> {
-        if block_height >= self.transition_reference_block {
-            Some(block_height - self.transition_reference_block)
-        } else {
-            None
-        }
+    /// Return seconds spent since transition from previous owner
+    pub fn seconds_spent_since_transition(&self, current_time: Timestamp) -> Option<Timedelta> {
+        current_time.checked_sub(self.transition_reference_time).ok()
     }
 
-    /// Return block when counter delay ends
-    pub fn counter_delay_end(&self, config: &Config) -> u64 {
-        self.begin_block + config.counter_delay_blocks
+    /// Return timestamp when counter delay ends
+    pub fn counter_delay_end(&self, config: &Config) -> Timestamp {
+        self.begin_time + config.counter_delay_secs
     }
 
-    /// Return block when transition delay ends
-    pub fn transition_delay_end(&self, config: &Config) -> u64 {
-        if self.transition_reference_block == 0 {
+    /// Return timestamp when transition delay ends
+    pub fn transition_delay_end(&self, config: &Config) -> Timestamp {
+        if self.transition_reference_time.is_zero() {
             // Special case for new bids
-            self.begin_block
+            self.begin_time
         } else {
-            self.transition_reference_block + config.counter_delay_blocks +
-                config.transition_delay_blocks
+            self.transition_reference_time + config.counter_delay_secs +
+                config.transition_delay_secs
         }
     }
 
-    /// Return block when bid delay ends
+    /// Return timestamp when bid delay ends
     ///
     /// Note: There is no effective bid delay when the rate is zero.
-    pub fn bid_delay_end(&self, config: &Config) -> u64 {
+    pub fn bid_delay_end(&self, config: &Config) -> Timestamp {
         let delay = if !self.rate.is_zero() {
-            config.counter_delay_blocks + config.bid_delay_blocks
+            config.counter_delay_secs + config.bid_delay_secs
         } else {
-            0
+            Timedelta::zero()
         };
-        self.begin_block + delay
+        self.begin_time + delay
     }
 
-    /// Return number of blocks since beginning that the deposit allows for
-    pub fn max_blocks(&self) -> Option<u64> {
-        blocks_from_deposit(self.begin_deposit, self.rate)
+    /// Return number of seconds since beginning that the deposit allows for
+    pub fn max_seconds(&self) -> Option<Timedelta> {
+        seconds_from_deposit(self.begin_deposit, self.rate)
     }
 
-    /// Return block when ownership expires
-    pub fn expire_block(&self) -> Option<u64> {
-        self.max_blocks().map(|max_blocks| max_blocks + self.begin_block)
+    /// Return timestamp when ownership expires
+    pub fn expire_time(&self) -> Option<Timestamp> {
+        self.max_seconds().map(|max_seconds| self.begin_time + max_seconds)
     }
 
     /// Return max allowed deposit for the name
-    pub fn max_allowed_deposit(&self, config: &Config, block_height: u64) -> Uint128 {
-        let blocks_spent = match self.blocks_spent_since_bid(block_height) {
-            Some(blocks_spent) => blocks_spent,
+    pub fn max_allowed_deposit(&self, config: &Config, current_time: Timestamp) -> Uint128 {
+        let seconds_spent = match self.seconds_spent_since_bid(current_time) {
+            Some(seconds_spent) => seconds_spent,
             None => return Uint128::zero(),
         };
-        let max_blocks_from_beginning = config.max_lease_blocks + blocks_spent;
-        deposit_from_blocks_floor(max_blocks_from_beginning, self.rate)
+        let max_seconds_from_beginning = config.max_lease_secs + seconds_spent;
+        deposit_from_seconds_floor(max_seconds_from_beginning, self.rate)
     }
 
     /// Return owner status
-    pub fn owner_status(&self, config: &Config, block_height: u64) -> OwnerStatus {
-        let blocks_spent_since_bid = match self.blocks_spent_since_bid(block_height) {
-            Some(blocks_spent) => blocks_spent,
+    pub fn owner_status(&self, config: &Config, current_time: Timestamp) -> OwnerStatus {
+        let seconds_spent_since_bid = match self.seconds_spent_since_bid(current_time) {
+            Some(seconds_spent) => seconds_spent,
             None => return OwnerStatus::Expired {
-                expire_block: 0,
-                transition_reference_block: self.transition_reference_block,
+                expire_time: Timestamp::zero(),
+                transition_reference_time: self.transition_reference_time,
             },
         };
 
-        if let Some(max_blocks) = self.max_blocks() {
-            if blocks_spent_since_bid >= max_blocks {
+        if let Some(max_seconds) = self.max_seconds() {
+            if seconds_spent_since_bid >= max_seconds {
                 return OwnerStatus::Expired {
-                    expire_block: self.begin_block + max_blocks,
-                    transition_reference_block: self.transition_reference_block,
+                    expire_time: self.begin_time + max_seconds,
+                    transition_reference_time: self.transition_reference_time,
                 };
             }
         }
 
-        let blocks_spent_since_transition = match self.blocks_spent_since_transition(block_height) {
-            Some(blocks_spent) => blocks_spent,
+        let seconds_spent_since_transition = match self.seconds_spent_since_transition(current_time) {
+            Some(seconds_spent) => seconds_spent,
             None => return OwnerStatus::Expired {
-                expire_block: 0,
-                transition_reference_block: self.transition_reference_block,
+                expire_time: Timestamp::zero(),
+                transition_reference_time: self.transition_reference_time,
             },
         };
-        if blocks_spent_since_bid < config.counter_delay_blocks {
+        if seconds_spent_since_bid < config.counter_delay_secs {
             OwnerStatus::CounterDelay {
                 name_owner: self.previous_owner.clone(),
                 bid_owner: self.owner.clone(),
-                transition_reference_block: self.previous_transition_reference_block,
+                transition_reference_time: self.previous_transition_reference_time,
             }
-        } else if blocks_spent_since_transition < config.counter_delay_blocks + config.transition_delay_blocks {
+        } else if seconds_spent_since_transition < config.counter_delay_secs + config.transition_delay_secs {
             OwnerStatus::TransitionDelay {
                 owner: self.owner.clone(),
-                transition_reference_block: self.transition_reference_block,
+                transition_reference_time: self.transition_reference_time,
             }
         } else {
             OwnerStatus::Valid {
                 owner: self.owner.clone(),
-                transition_reference_block: self.transition_reference_block,
+                transition_reference_time: self.transition_reference_time,
             }
         }
     }
@@ -192,19 +185,19 @@ pub enum OwnerStatus {
     CounterDelay {
         name_owner: Option<Addr>,
         bid_owner: Addr,
-        transition_reference_block: u64,
+        transition_reference_time: Timestamp,
     },
     TransitionDelay {
         owner: Addr,
-        transition_reference_block: u64,
+        transition_reference_time: Timestamp,
     },
     Valid {
         owner: Addr,
-        transition_reference_block: u64,
+        transition_reference_time: Timestamp,
     },
     Expired {
-        expire_block: u64,
-        transition_reference_block: u64,
+        expire_time: Timestamp,
+        transition_reference_time: Timestamp,
     },
 }
 
