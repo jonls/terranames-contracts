@@ -1744,29 +1744,3 @@ fn query_all_name_states() {
     assert_eq!(state.names[0].name, "other");
     assert_eq!(state.names[0].state.rate.u128(), 4);
 }
-
-// Question:
-// - Is max lease blocks a good idea? It is supposed to alleviate any weirdness
-//   from people extending their lease 1000 years into the future. Since they
-//   have to prepay the full lease, allowing it may not be any issue. It is
-//   probably good to have the min lease to avoid a kind of denial of service
-//   where someone can distrupt a name for a short period with a high deposit
-//   and rate. Ideally the user with the longer-term interest in the name wins
-//   out in most cases against short term disruption. Having a longer max lease
-//   may help with this since the person with long-term interest can increase
-//   the rate temporarily, then later spread the spend out over much longer
-//   time when the short-term interest subsides. Though at some point the
-//   interest in keeping names stable may play against the interest of using
-//   names efficiently warranting keeping the max lease shorter than infinite
-//   to allow better use of names without someone having to amass huge funds
-//   to unseat an underutilized name.
-// - It is unclear if set rate results in the right mechanics. The purpose is
-//   to allow for the owner to decrease the spend rate when they no longer
-//   perceive the name to be as valuable as before. If this results in no new
-//   bids, they will at least hold on to the name longer and have a larger
-//   refund if there is a bid later.
-// - How to best handle new names? 1) A bids on new name, immediately becomes
-//   owner, but if B bids during the counter delay B has to go through a
-//   transition; 2) A bids on new name, does not become true owner until after
-//   counter delay, but if B bids during the counter delay B also does not go
-//   through transition. (probably option 2 is best)
