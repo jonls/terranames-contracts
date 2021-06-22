@@ -7,7 +7,6 @@ use cosmwasm_std::testing::{
 };
 use terranames::testing::cw20::Cw20Querier;
 use terranames::testing::terra::TaxQuerier;
-use terranames::testing::terraswap::TerraswapQuerier;
 use terra_cosmwasm::TerraQueryWrapper;
 
 pub fn mock_dependencies(
@@ -26,7 +25,6 @@ pub fn mock_dependencies(
 
 pub struct MockQuerier {
     pub tax_querier: TaxQuerier,
-    pub terraswap_querier: TerraswapQuerier,
     pub terranames_token_querier: Cw20Querier,
     pub base_querier: CosmMockQuerier<TerraQueryWrapper>,
 }
@@ -35,7 +33,6 @@ impl MockQuerier {
     pub fn new() -> MockQuerier {
         MockQuerier {
             tax_querier: TaxQuerier::default(),
-            terraswap_querier: TerraswapQuerier::new(Addr::unchecked("terraswap_factory")),
             terranames_token_querier: Cw20Querier::new(Addr::unchecked("token_contract")),
             base_querier: CosmMockQuerier::new(&[]),
         }
@@ -53,8 +50,6 @@ impl MockQuerier {
 
     fn handle_query(&self, request: QueryRequest<TerraQueryWrapper>) -> QuerierResult {
         if let Some(res) = self.tax_querier.handle_query(&request) {
-            return res;
-        } else if let Some(res) = self.terraswap_querier.handle_query(&request) {
             return res;
         } else if let Some(res) = self.terranames_token_querier.handle_query(&request) {
             return res;

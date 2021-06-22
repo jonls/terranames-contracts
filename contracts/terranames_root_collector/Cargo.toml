@@ -21,7 +21,6 @@ serde = { version = "1.0.103", default-features = false, features = ["derive"] }
 snafu = { version = "0.6.10", default-features = false, features = ["std", "backtraces"] }
 terra-cosmwasm = "2.0.0"
 terranames = { path = "../../packages/terranames", default-features = false, version = "0.1.0"}
-terraswap = "2.1.0"
 
 [dev-dependencies]
 cosmwasm-schema = { version = "0.14.0" }

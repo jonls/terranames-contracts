@@ -1,45 +1,74 @@
 use cosmwasm_std::{
-    attr, entry_point, from_binary, to_binary, Addr, Coin, CosmosMsg, Decimal,
-    Deps, DepsMut, Env, Fraction, MessageInfo, QuerierWrapper, QueryResponse,
+    attr, entry_point, from_binary, to_binary, Addr, BankMsg, Coin, CosmosMsg,
+    Decimal, Deps, DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse,
     Response, StdResult, Uint128, WasmMsg,
 };
 
-use cw20::{
-    BalanceResponse as Cw20BalanceResponse, Cw20ExecuteMsg, Cw20QueryMsg,
-    Cw20ReceiveMsg,
-};
+use cw20::{Cw20ExecuteMsg, Cw20ReceiveMsg};
 use terranames::root_collector::{
     ConfigResponse, ExecuteMsg, InstantiateMsg, MigrateMsg, ReceiveMsg,
-    StateResponse, QueryMsg,
+    StakeStateResponse, StateResponse, QueryMsg,
 };
-use terranames::terra::{calculate_added_tax, calculate_tax, deduct_tax};
-use terraswap::asset::{Asset, AssetInfo};
-use terraswap::pair::{
-    ExecuteMsg as PairHandleMsg, QueryMsg as PairQueryMsg,
-    PoolResponse,
-};
-use terraswap::querier::query_pair_info;
+use terranames::terra::deduct_coin_tax;
 
-use crate::errors::{ContractError, InvalidConfig, Unauthorized, Unfunded};
+use crate::errors::{
+    ContractError, InsufficientFunds, InsufficientTokens, Unauthorized,
+};
 use crate::state::{
-    read_config, read_state, store_config, store_state, Config, State,
+    read_config, read_option_stake_state, read_stake_state, read_state,
+    store_config, store_stake_state, store_state, Config, StakeState, State,
 };
 
 type ContractResult<T> = Result<T, ContractError>;
 
-// TODO cw20 package balance query helper seems to be broken in cosmwasm 0.14?
-fn query_token_balance(
+/// Return the funds of type denom attached in the request.
+fn get_sent_funds(info: &MessageInfo, denom: &str) -> Uint128 {
+    info.funds
+        .iter()
+        .find(|c| c.denom == denom)
+        .map(|c| c.amount)
+        .unwrap_or_else(Uint128::zero)
+}
+
+/// Create message for dividend deposits
+fn send_dividend_msg(
     querier: &QuerierWrapper,
-    token_contract: &Addr,
-    address: &Addr,
-) -> StdResult<Uint128> {
-    let query_response: Cw20BalanceResponse = querier.query_wasm_smart(
-        token_contract,
-        &Cw20QueryMsg::Balance {
-            address: address.into(),
-        },
-    )?;
-    Ok(query_response.balance)
+    config: &Config,
+    to: &Addr,
+    amount: Uint128,
+) -> StdResult<CosmosMsg> {
+    Ok(CosmosMsg::Bank(
+        BankMsg::Send {
+            to_address: to.into(),
+            amount: vec![
+                deduct_coin_tax(
+                    querier,
+                    Coin {
+                        denom: config.stable_denom.clone(),
+                        amount,
+                    },
+                )?
+            ],
+        }
+    ))
+}
+
+/// Create message for sending tokens
+fn send_tokens_msg(
+    config: &Config,
+    recipient: &Addr,
+    amount: Uint128,
+) -> StdResult<CosmosMsg> {
+    Ok(CosmosMsg::Wasm(
+        WasmMsg::Execute {
+            contract_addr: config.base_token.clone().into(),
+            msg: to_binary(&Cw20ExecuteMsg::Transfer {
+                recipient: recipient.into(),
+                amount,
+            })?,
+            send: vec![],
+        }
+    ))
 }
 
 #[entry_point]
@@ -49,38 +78,17 @@ pub fn instantiate(
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> ContractResult<Response> {
-    if msg.min_token_price.is_zero() {
-        return InvalidConfig.fail();
-    }
-
-    let terranames_token = deps.api.addr_validate(&msg.terranames_token)?;
-    let terraswap_factory = deps.api.addr_validate(&msg.terraswap_factory)?;
-
-    // Query for the swap contract
-    let pair = query_pair_info(
-        &deps.querier,
-        terraswap_factory,
-        &[
-            AssetInfo::Token {
-                contract_addr: terranames_token.clone(),
-            },
-            AssetInfo::NativeToken {
-                denom: msg.stable_denom.clone(),
-            },
-        ]
-    )?;
-
     let config = Config {
-        terranames_token: terranames_token,
-        terraswap_pair: pair.contract_addr,
+        base_token: deps.api.addr_validate(&msg.base_token)?,
         stable_denom: msg.stable_denom,
-        min_token_price: msg.min_token_price,
     };
 
     store_config(deps.storage, &config)?;
 
     let state = State {
-        initial_token_pool: Uint128::zero(),
+        multiplier: Decimal::zero(),
+        total_staked: Uint128::zero(),
+        residual: Uint128::zero(),
     };
 
     store_state(deps.storage, &state)?;
@@ -96,11 +104,24 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> ContractResult<Response> {
     match msg {
-        ExecuteMsg::ConsumeExcessStable {} => {
-            execute_consume_excess_stable(deps, env, info)
+        ExecuteMsg::Deposit {} => {
+            execute_deposit(deps, env, info)
         },
-        ExecuteMsg::ConsumeExcessTokens {} => {
-            execute_consume_excess_tokens(deps, env, info)
+        ExecuteMsg::WithdrawTokens { amount, to } => {
+            let to_addr = if let Some(to) = to {
+                Some(deps.api.addr_validate(&to)?)
+            } else {
+                None
+            };
+            execute_withdraw_tokens(deps, env, info, amount, to_addr)
+        },
+        ExecuteMsg::WithdrawDividends { to } => {
+            let to_addr = if let Some(to) = to {
+                Some(deps.api.addr_validate(&to)?)
+            } else {
+                None
+            };
+            execute_withdraw_dividends(deps, env, info, to_addr)
         },
         ExecuteMsg::Receive(msg) => {
             execute_receive(deps, env, info, msg)
@@ -108,227 +129,127 @@ pub fn execute(
     }
 }
 
-fn execute_consume_excess_stable(
+fn execute_deposit(
     deps: DepsMut,
-    env: Env,
-    _info: MessageInfo,
+    _env: Env,
+    info: MessageInfo,
 ) -> ContractResult<Response> {
     let config = read_config(deps.storage)?;
     let mut state = read_state(deps.storage)?;
 
-    // Query for current stable coin balance
-    let stable_balance = deps.querier.query_balance(
-        env.contract.address.clone(),
-        &config.stable_denom,
-    )?.amount;
-    if stable_balance.is_zero() {
-        return Unfunded.fail();
-    }
+    let deposit = get_sent_funds(&info, &config.stable_denom) + state.residual;
+    let (deposit_per_stake, residual) = if !state.total_staked.is_zero() {
+        let deposit_per_stake = Decimal::from_ratio(deposit, state.total_staked);
+        let residual = deposit.checked_sub(deposit_per_stake * state.total_staked)?;
+        (deposit_per_stake, residual)
+    } else {
+        (Decimal::zero(), deposit)
+    };
 
-    // Query for the current token balance
-    let token_balance = query_token_balance(
-        &deps.querier,
-        &config.terranames_token,
-        &env.contract.address,
-    )?;
+    state.multiplier = state.multiplier + deposit_per_stake;
+    state.residual = residual;
 
-    let mut messages = vec![];
-
-    let mut stable_to_send = stable_balance;
-    let tokens_to_release_left = std::cmp::min(token_balance, state.initial_token_pool);
-    if !tokens_to_release_left.is_zero() {
-        // Query for the swap pool exchange rate
-        let pair_pool: PoolResponse = deps.querier.query_wasm_smart(
-            &config.terraswap_pair,
-            &PairQueryMsg::Pool {},
-        )?;
-
-        let (pool_tokens, pool_stables) = match (&pair_pool.assets[0].info, &pair_pool.assets[1].info) {
-            (&AssetInfo::NativeToken { .. }, &AssetInfo::Token { .. }) => {
-                (pair_pool.assets[1].amount, pair_pool.assets[0].amount)
-            },
-            (&AssetInfo::Token { .. }, &AssetInfo::NativeToken { .. }) => {
-                (pair_pool.assets[0].amount, pair_pool.assets[1].amount)
-            },
-            _ => {
-                panic!("Unexpected pool data");
-            },
-        };
-
-        let max_provide_stable_tax = calculate_tax(&deps.querier, &config.stable_denom, stable_to_send)?;
-        let max_provide_stable = stable_to_send.checked_sub(max_provide_stable_tax)?;
-        let max_tokens_per_stable = config.min_token_price.inv().expect("Invalid token price");
-
-        let stable_price_in_tokens = if !pool_stables.is_zero() {
-            std::cmp::min(
-                Decimal::from_ratio(pool_tokens, pool_stables),
-                max_tokens_per_stable,
-            )
-        } else {
-            max_tokens_per_stable
-        };
-        let max_provide_tokens = max_provide_stable * stable_price_in_tokens;
-
-        // Reduce stablecoins provided if max threshold is hit
-        let (provide_tokens, provide_stable, provide_stable_tax) = if max_provide_tokens > tokens_to_release_left {
-            let min_stables_per_token = config.min_token_price;
-            let token_price_in_stables = if !pool_tokens.is_zero() {
-                std::cmp::max(
-                    Decimal::from_ratio(pool_stables, pool_tokens),
-                    min_stables_per_token,
-                )
-            } else {
-                min_stables_per_token
-            };
-            let reduced_provide_stable = tokens_to_release_left * token_price_in_stables;
-            (tokens_to_release_left, reduced_provide_stable, calculate_added_tax(&deps.querier, &config.stable_denom, reduced_provide_stable)?)
-        } else {
-            (max_provide_tokens, max_provide_stable, max_provide_stable_tax)
-        };
-
-        // Allow swap pair to withdraw the tokens
-        messages.push(
-            CosmosMsg::Wasm(
-                WasmMsg::Execute {
-                    contract_addr: config.terranames_token.to_string(),
-                    msg: to_binary(
-                        &Cw20ExecuteMsg::IncreaseAllowance {
-                            spender: config.terraswap_pair.to_string(),
-                            amount: provide_tokens,
-                            expires: None,
-                        },
-                    )?,
-                    send: vec![],
-                }
-            ),
-        );
-
-        // Provide tokens and stablecoins to liquidity pool
-        messages.push(
-            CosmosMsg::Wasm(
-                WasmMsg::Execute {
-                    contract_addr: config.terraswap_pair.to_string(),
-                    msg: to_binary(
-                        &PairHandleMsg::ProvideLiquidity {
-                            assets: [
-                                Asset {
-                                    info: AssetInfo::Token {
-                                        contract_addr: config.terranames_token.into(),
-                                    },
-                                    amount: provide_tokens,
-                                },
-                                Asset {
-                                    info: AssetInfo::NativeToken {
-                                        denom: config.stable_denom.clone(),
-                                    },
-                                    amount: provide_stable,
-                                },
-                            ],
-                            slippage_tolerance: None,
-                        },
-                    )?,
-                    send: vec![
-                        Coin {
-                            denom: config.stable_denom.clone(),
-                            amount: provide_stable,
-                        },
-                    ],
-                },
-            ),
-        );
-
-        // Calculate how much of the deposit is left
-        stable_to_send = Uint128::from(
-            stable_to_send.u128().saturating_sub(provide_stable.u128()).saturating_sub(provide_stable_tax.u128())
-        );
-        // Calculate how much of the initial token pool is left
-        state.initial_token_pool = Uint128::from(
-            state.initial_token_pool.u128().saturating_sub(provide_tokens.u128())
-        );
-        store_state(deps.storage, &state)?;
-    }
-
-    // Use remaining funds to buy back tokens
-    if !stable_to_send.is_zero() {
-        let remaining_after_tax = deduct_tax(&deps.querier, &config.stable_denom, stable_to_send)?;
-        messages.push(
-            CosmosMsg::Wasm(
-                WasmMsg::Execute {
-                    contract_addr: config.terraswap_pair.into(),
-                    msg: to_binary(
-                        &PairHandleMsg::Swap {
-                            offer_asset: Asset {
-                                info: AssetInfo::NativeToken {
-                                    denom: config.stable_denom.clone(),
-                                },
-                                amount: remaining_after_tax,
-                            },
-                            to: None,
-                            belief_price: None,
-                            max_spread: None,
-                        },
-                    )?,
-                    send: vec![
-                        Coin {
-                            denom: config.stable_denom.clone(),
-                            amount: remaining_after_tax,
-                        },
-                    ],
-                },
-            ),
-        );
-    }
+    store_state(deps.storage, &state)?;
 
     Ok(Response {
-        messages,
+        messages: vec![],
         attributes: vec![
-            attr("action", "consume_excess_stable"),
-            attr("initial_token_pool", state.initial_token_pool),
+            attr("action", "deposit"),
+            attr("amount", deposit),
+            attr("multiplier", state.multiplier),
+            attr("residual", state.residual),
         ],
         data: None,
         submessages: vec![],
     })
 }
 
-fn execute_consume_excess_tokens(
+fn execute_withdraw_tokens(
     deps: DepsMut,
-    env: Env,
-    _info: MessageInfo,
+    _env: Env,
+    info: MessageInfo,
+    amount: Uint128,
+    to: Option<Addr>,
+) -> ContractResult<Response> {
+    let config = read_config(deps.storage)?;
+    let mut state = read_state(deps.storage)?;
+
+    let opt_stake_state = read_option_stake_state(deps.storage, &info.sender)?;
+    let mut stake_state = if let Some(stake_state) = opt_stake_state {
+        stake_state
+    } else {
+        return InsufficientTokens.fail();
+    };
+
+    if stake_state.token_amount < amount {
+        return InsufficientTokens.fail();
+    }
+
+    let mut messages = vec![];
+
+    stake_state.update_dividend(state.multiplier);
+    stake_state.token_amount = stake_state.token_amount.checked_sub(amount)?;
+    store_stake_state(deps.storage, &info.sender, &stake_state)?;
+
+    state.total_staked = state.total_staked.checked_sub(amount)?;
+    store_state(deps.storage, &state)?;
+
+    messages.push(
+        send_tokens_msg(
+            &config,
+            &to.unwrap_or(info.sender),
+            amount,
+        )?
+    );
+
+    Ok(Response {
+        messages,
+        attributes: vec![
+            attr("action", "withdraw_tokens"),
+        ],
+        data: None,
+        submessages: vec![],
+    })
+}
+
+fn execute_withdraw_dividends(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    to: Option<Addr>,
 ) -> ContractResult<Response> {
     let config = read_config(deps.storage)?;
     let state = read_state(deps.storage)?;
 
-    // Query for the current token balance
-    let token_balance = query_token_balance(
-        &deps.querier,
-        &config.terranames_token,
-        &env.contract.address,
-    )?;
+    let opt_stake_state = read_option_stake_state(deps.storage, &info.sender)?;
+    let mut stake_state = if let Some(stake_state) = opt_stake_state {
+        stake_state
+    } else {
+        return InsufficientFunds.fail();
+    };
 
-    let tokens_to_burn = Uint128::from(
-        token_balance.u128().saturating_sub(state.initial_token_pool.u128())
-    );
-    if tokens_to_burn.is_zero() {
-        return Unfunded.fail();
+    stake_state.update_dividend(state.multiplier);
+    if stake_state.dividend.is_zero() {
+        return InsufficientFunds.fail();
     }
 
+    let mut messages = vec![];
+    messages.push(
+        send_dividend_msg(
+            &deps.querier,
+            &config,
+            &to.unwrap_or(info.sender.clone()),
+            stake_state.dividend,
+        )?
+    );
+
+    stake_state.dividend = Uint128::zero();
+    store_stake_state(deps.storage, &info.sender, &stake_state)?;
+
     Ok(Response {
-        messages: vec![
-            CosmosMsg::Wasm(
-                WasmMsg::Execute {
-                    contract_addr: config.terranames_token.into(),
-                    msg: to_binary(
-                        &Cw20ExecuteMsg::Burn {
-                            amount: token_balance,
-                        },
-                    )?,
-                    send: vec![],
-                },
-            )
-        ],
+        messages,
         attributes: vec![
-            attr("action", "consume_excess_tokens"),
-            attr("tokens", token_balance),
+            attr("action", "withdraw_dividends"),
         ],
         data: None,
         submessages: vec![],
@@ -344,29 +265,54 @@ fn execute_receive(
     let msg: ReceiveMsg = from_binary(&wrapper.msg)?;
 
     let config = read_config(deps.storage)?;
-    let mut state = read_state(deps.storage)?;
 
-    if info.sender != config.terranames_token {
+    if info.sender != config.base_token {
         return Unauthorized.fail();
     }
 
     match msg {
-        ReceiveMsg::AcceptInitialTokens {} => {
-            state.initial_token_pool += wrapper.amount;
-            store_state(deps.storage, &state)?;
-
-            Ok(Response {
-                messages: vec![],
-                attributes: vec![
-                    attr("action", "receive"),
-                    attr("receive_type", "accept_initial_tokens"),
-                    attr("initial_token_pool", state.initial_token_pool),
-                ],
-                data: None,
-                submessages: vec![],
-            })
+        ReceiveMsg::Stake {} => {
+            execute_receive_stake(deps, wrapper)
         },
     }
+}
+
+fn execute_receive_stake(
+    deps: DepsMut,
+    wrapper: Cw20ReceiveMsg,
+) -> ContractResult<Response> {
+    let mut state = read_state(deps.storage)?;
+
+    let token_sender = deps.api.addr_validate(&wrapper.sender)?;
+    let opt_stake_state = read_option_stake_state(deps.storage, &token_sender)?;
+
+    let stake_state = if let Some(mut stake_state) = opt_stake_state {
+        stake_state.update_dividend(state.multiplier);
+        stake_state.token_amount += wrapper.amount;
+        stake_state
+    } else {
+        StakeState {
+            multiplier: state.multiplier,
+            token_amount: wrapper.amount,
+            dividend: Uint128::zero(),
+        }
+    };
+    store_stake_state(deps.storage, &token_sender, &stake_state)?;
+
+    state.total_staked += wrapper.amount;
+    store_state(deps.storage, &state)?;
+
+    Ok(Response {
+        messages: vec![],
+        attributes: vec![
+            attr("action", "receive"),
+            attr("receive_type", "stake"),
+            attr("token_amount", stake_state.token_amount),
+            attr("multiplier", stake_state.multiplier),
+        ],
+        data: None,
+        submessages: vec![],
+    })
 }
 
 #[entry_point]
@@ -382,6 +328,13 @@ pub fn query(
         QueryMsg::State {} => {
             Ok(to_binary(&query_state(deps, env)?)?)
         },
+        QueryMsg::StakeState { address } => {
+            Ok(to_binary(&query_stake_state(
+                deps,
+                env,
+                deps.api.addr_validate(&address)?,
+            )?)?)
+        },
     }
 }
 
@@ -391,10 +344,8 @@ fn query_config(
 ) -> ContractResult<ConfigResponse> {
     let config = read_config(deps.storage)?;
     Ok(ConfigResponse {
-        terranames_token: config.terranames_token.into(),
-        terraswap_pair: config.terraswap_pair.into(),
+        base_token: config.base_token.into(),
         stable_denom: config.stable_denom,
-        min_token_price: config.min_token_price,
     })
 }
 
@@ -404,7 +355,23 @@ fn query_state(
 ) -> ContractResult<StateResponse> {
     let state = read_state(deps.storage)?;
     Ok(StateResponse {
-        initial_token_pool: state.initial_token_pool,
+        multiplier: state.multiplier,
+        total_staked: state.total_staked,
+        residual: state.residual,
+    })
+}
+
+fn query_stake_state(
+    deps: Deps,
+    _env: Env,
+    address: Addr,
+) -> ContractResult<StakeStateResponse> {
+    let state = read_state(deps.storage)?;
+    let stake_state = read_stake_state(deps.storage, &address)?;
+    Ok(StakeStateResponse {
+        token_amount: stake_state.token_amount,
+        multiplier: stake_state.multiplier,
+        dividend: stake_state.dividend(state.multiplier),
     })
 }
 

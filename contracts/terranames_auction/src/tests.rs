@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     coins, from_binary, Addr, BankMsg, CosmosMsg, Deps, DepsMut, Response,
-    Uint128,
+    Uint128, WasmMsg,
 };
 use cosmwasm_std::testing::{mock_env, mock_info};
 
@@ -8,6 +8,7 @@ use terranames::auction::{
     AllNameStatesResponse, ConfigResponse, ExecuteMsg, InstantiateMsg,
     NameStateResponse, QueryMsg,
 };
+use terranames::root_collector::ExecuteMsg as RootCollectorExecuteMsg;
 use terranames::testing::helpers::EnvBuilder;
 use terranames::utils::Timedelta;
 
@@ -318,9 +319,12 @@ fn initial_non_zero_bid() {
     // TODO create a similar assert for the refund message in tests below!!
     let send_to_collector_msg = &res.messages[0];
     match send_to_collector_msg {
-        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), "collector");
-            assert_eq!(amount, &coins(deposit_amount - tax_amount, ABC_COIN));
+        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+            assert_eq!(contract_addr.as_str(), "collector");
+            assert_eq!(send, &coins(deposit_amount - tax_amount, ABC_COIN));
+
+            let msg: RootCollectorExecuteMsg = from_binary(&msg).unwrap();
+            assert!(matches!(msg, RootCollectorExecuteMsg::Deposit { }));
         },
         _ => panic!("Unexpected message type: {:?}", send_to_collector_msg),
     }
@@ -824,9 +828,12 @@ fn fund_name() {
     // Assert funds message sent to collector
     let send_to_collector_msg = &res.messages[0];
     match send_to_collector_msg {
-        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
-            assert_eq!(to_address.as_str(), "collector");
-            assert_eq!(amount, &coins(deposit_amount - tax_amount, ABC_COIN));
+        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+            assert_eq!(contract_addr.as_str(), "collector");
+            assert_eq!(send, &coins(deposit_amount - tax_amount, ABC_COIN));
+
+            let msg: RootCollectorExecuteMsg = from_binary(&msg).unwrap();
+            assert!(matches!(msg, RootCollectorExecuteMsg::Deposit { }));
         },
         _ => panic!("Unexpected message type"),
     }

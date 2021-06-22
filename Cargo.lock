@@ -594,7 +594,6 @@ dependencies = [
  "schemars",
  "serde",
  "terra-cosmwasm",
- "terraswap",
 ]
 
 [[package]]
@@ -637,21 +636,6 @@ dependencies = [
  "snafu",
  "terra-cosmwasm",
  "terranames",
- "terraswap",
-]
-
-[[package]]
-name = "terraswap"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c4f32f6d9a9452940891a31d193cce07eb975dd8e9593c01434ea9c7a68eec5"
-dependencies = [
- "cosmwasm-std",
- "cosmwasm-storage",
- "cw20",
- "schemars",
- "serde",
- "terra-cosmwasm",
 ]
 
 [[package]]

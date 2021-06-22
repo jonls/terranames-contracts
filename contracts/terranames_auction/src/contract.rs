@@ -1,13 +1,16 @@
 use cosmwasm_std::{
     attr, entry_point, to_binary, Addr, BankMsg, Coin, CosmosMsg, Deps,
     DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse, StdResult,
-    Response, Uint128,
+    Response, Uint128, WasmMsg,
 };
 
 use terranames::auction::{
     deposit_from_seconds_ceil, deposit_from_seconds_floor, ConfigResponse,
     AllNameStatesResponse, ExecuteMsg, InstantiateMsg, MigrateMsg,
     NameStateItem, NameStateResponse, QueryMsg,
+};
+use terranames::root_collector::{
+    ExecuteMsg as RootCollectorExecuteMsg,
 };
 use terranames::terra::deduct_coin_tax;
 use terranames::utils::Timestamp;
@@ -62,10 +65,6 @@ fn refund_deposit_msg(
 }
 
 /// Create message for sending deposits to collector
-///
-/// Currently just sends funds to the collector. In the future this could use
-/// a WasmMsg to trigger some kind of accounting in the collector and/or giving
-/// some priviledge to the sender (e.g. reward tokens or something like that).
 fn send_to_collector_msg(
     querier: &QuerierWrapper,
     _env: &Env,
@@ -73,10 +72,11 @@ fn send_to_collector_msg(
     _source_addr: &Addr,
     amount: Uint128,
 ) -> StdResult<CosmosMsg> {
-    Ok(CosmosMsg::Bank(
-        BankMsg::Send {
-            to_address: config.collector_addr.to_string(),
-            amount: vec![
+    Ok(CosmosMsg::Wasm(
+        WasmMsg::Execute {
+            contract_addr: config.collector_addr.to_string(),
+            msg: to_binary(&RootCollectorExecuteMsg::Deposit {})?,
+            send: vec![
                 deduct_coin_tax(
                     querier,
                     Coin {

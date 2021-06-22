@@ -10,10 +10,10 @@ pub enum ContractError {
     Overflow { source: OverflowError },
     #[snafu(display("Unauthorized"))]
     Unauthorized { backtrace: Option<snafu::Backtrace> },
-    #[snafu(display("Unfunded"))]
-    Unfunded { backtrace: Option<snafu::Backtrace> },
-    #[snafu(display("Invalid Config"))]
-    InvalidConfig { backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Insufficient tokens"))]
+    InsufficientTokens { backtrace: Option<snafu::Backtrace> },
+    #[snafu(display("Insufficient funds"))]
+    InsufficientFunds { backtrace: Option<snafu::Backtrace> },
 }
 
 impl From<StdError> for ContractError {

@@ -7,17 +7,10 @@ use cw20::Cw20ReceiveMsg;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct InstantiateMsg {
-    /// Terraswap factory
-    pub terraswap_factory: String,
-    /// Terranames token
-    pub terranames_token: String,
+    /// Base token
+    pub base_token: String,
     /// Stablecoin denomination
     pub stable_denom: String,
-    /// Minimum token price in stables (also used if the swap pool is empty)
-    ///
-    /// Tokens are not released to the swap pool at a lower implied price than
-    /// this (in tokens/stablecoin).
-    pub min_token_price: Decimal,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -25,13 +18,26 @@ pub struct InstantiateMsg {
 pub enum QueryMsg {
     Config {},
     State {},
+    StakeState {
+        /// Address to query stake state for
+        address: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    ConsumeExcessStable {},
-    ConsumeExcessTokens {},
+    Deposit {},
+    WithdrawTokens {
+        /// Amount to withdraw
+        amount: Uint128,
+        /// Address to withdraw to
+        to: Option<String>,
+    },
+    WithdrawDividends {
+        /// Address to withdraw to
+        to: Option<String>,
+    },
     Receive(Cw20ReceiveMsg),
 }
 
@@ -41,28 +47,36 @@ pub struct MigrateMsg {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct ConfigResponse {
-    /// Terranames token
-    pub terranames_token: Addr,
-    /// Terraswap pair
-    pub terraswap_pair: Addr,
+    /// Base token
+    pub base_token: Addr,
     /// Stablecoin denomination
     pub stable_denom: String,
-    /// Minimum token price in stables (also used if the swap pool is empty)
-    ///
-    /// Tokens are not released to the swap pool at a lower implied price than
-    /// this (in stablecoin/token).
-    pub min_token_price: Decimal,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct StateResponse {
-    /// Number of tokens in initial release pool
-    pub initial_token_pool: Uint128,
+    /// Current multiplier
+    pub multiplier: Decimal,
+    /// Total tokens staked
+    pub total_staked: Uint128,
+    /// Residual funds
+    pub residual: Uint128,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct StakeStateResponse {
+    /// Token amount
+    pub token_amount: Uint128,
+    /// Initial multiplier
+    pub multiplier: Decimal,
+    /// Dividend
+    pub dividend: Uint128,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiveMsg {
-    AcceptInitialTokens {},
+    Stake {},
 }
