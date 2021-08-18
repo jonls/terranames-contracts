@@ -1,7 +1,7 @@
 use cosmwasm_std::{Coin, QuerierWrapper, StdResult, Uint128};
 use terra_cosmwasm::TerraQuerier;
 
-const DECIMAL_FRACTION: Uint128 = Uint128(1_000_000_000_000_000_000u128);
+const DECIMAL_FRACTION: Uint128 = Uint128::new(1_000_000_000_000_000_000u128);
 
 /// Calculate tax that is subtracted from the sent amount
 ///

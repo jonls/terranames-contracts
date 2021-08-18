@@ -1,5 +1,5 @@
 use cosmwasm_std::{
-    coins, from_binary, Addr, BankMsg, CosmosMsg, Deps, DepsMut, Response,
+    coins, from_binary, Addr, CosmosMsg, Deps, DepsMut, Response, SubMsg,
     Uint128, WasmMsg,
 };
 use cosmwasm_std::testing::{mock_env, mock_info};
@@ -319,9 +319,9 @@ fn initial_non_zero_bid() {
     // TODO create a similar assert for the refund message in tests below!!
     let send_to_collector_msg = &res.messages[0];
     match send_to_collector_msg {
-        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+        SubMsg{ msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
             assert_eq!(contract_addr.as_str(), "collector");
-            assert_eq!(send, &coins(deposit_amount - tax_amount, ABC_COIN));
+            assert_eq!(funds, &coins(deposit_amount - tax_amount, ABC_COIN));
 
             let msg: RootCollectorExecuteMsg = from_binary(&msg).unwrap();
             assert!(matches!(msg, RootCollectorExecuteMsg::Deposit { }));
@@ -828,9 +828,9 @@ fn fund_name() {
     // Assert funds message sent to collector
     let send_to_collector_msg = &res.messages[0];
     match send_to_collector_msg {
-        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+        SubMsg { msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
             assert_eq!(contract_addr.as_str(), "collector");
-            assert_eq!(send, &coins(deposit_amount - tax_amount, ABC_COIN));
+            assert_eq!(funds, &coins(deposit_amount - tax_amount, ABC_COIN));
 
             let msg: RootCollectorExecuteMsg = from_binary(&msg).unwrap();
             assert!(matches!(msg, RootCollectorExecuteMsg::Deposit { }));

@@ -10,14 +10,14 @@ edition = "2018"
 backtraces = ["cosmwasm-std/backtraces"]
 
 [dependencies]
-cosmwasm-std = "0.14.0"
-cw20 = "0.6.1"
+cosmwasm-std = "0.16.0"
+cw20 = "0.8.0"
 schemars = "0.8.3"
 serde = { version = "1.0.103", default-features = false, features = ["derive"] }
-terra-cosmwasm = "2.0.0"
+terra-cosmwasm = "2.2.0"
 
 [dev-dependencies]
-cosmwasm-schema = "0.14.0"
+cosmwasm-schema = "0.16.0"
 
 [profile.dev]
 overflow-checks = true

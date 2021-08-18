@@ -1,8 +1,8 @@
 use std::str::FromStr;
 
 use cosmwasm_std::{
-    coins, from_binary, to_binary, BankMsg, CosmosMsg, Decimal, Uint128,
-    WasmMsg,
+    coins, from_binary, to_binary, BankMsg, CosmosMsg, Decimal, SubMsg,
+    Uint128, WasmMsg,
 };
 use cosmwasm_std::testing::{mock_env, mock_info};
 use cw20::{Cw20ExecuteMsg, Cw20ReceiveMsg};
@@ -328,9 +328,9 @@ fn withdraw_tokens() {
     // Check send token message
     let send_token_msg = &res.messages[0];
     match send_token_msg {
-        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+        SubMsg { msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
             assert_eq!(contract_addr.as_str(), "token_contract");
-            assert_eq!(send, &[]);
+            assert_eq!(funds, &[]);
             let cw20_msg: Cw20ExecuteMsg = from_binary(&msg).unwrap();
             match cw20_msg {
                 Cw20ExecuteMsg::Transfer { recipient, amount } => {
@@ -373,9 +373,9 @@ fn withdraw_tokens() {
     // Check send token message
     let send_token_msg = &res.messages[0];
     match send_token_msg {
-        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+        SubMsg { msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
             assert_eq!(contract_addr.as_str(), "token_contract");
-            assert_eq!(send, &[]);
+            assert_eq!(funds, &[]);
             let cw20_msg: Cw20ExecuteMsg = from_binary(&msg).unwrap();
             match cw20_msg {
                 Cw20ExecuteMsg::Transfer { recipient, amount } => {
@@ -447,9 +447,9 @@ fn withdraw_tokens_to_address() {
     // Check send token message
     let send_token_msg = &res.messages[0];
     match send_token_msg {
-        CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, send }) => {
+        SubMsg { msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
             assert_eq!(contract_addr.as_str(), "token_contract");
-            assert_eq!(send, &[]);
+            assert_eq!(funds, &[]);
             let cw20_msg: Cw20ExecuteMsg = from_binary(&msg).unwrap();
             match cw20_msg {
                 Cw20ExecuteMsg::Transfer { recipient, amount } => {
@@ -742,7 +742,7 @@ fn withdraw_dividends() {
     // Check send funds message
     let send_funds_msg = &res.messages[0];
     match send_funds_msg {
-        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+        SubMsg { msg: CosmosMsg::Bank(BankMsg::Send { to_address, amount }), .. } => {
             assert_eq!(to_address.as_str(), "staker_1");
             assert_eq!(amount, &coins(expected_dividend - expected_dividend_tax, ABC_COIN));
         },
@@ -809,7 +809,7 @@ fn withdraw_dividends_to_address() {
     // Check send funds message
     let send_funds_msg = &res.messages[0];
     match send_funds_msg {
-        CosmosMsg::Bank(BankMsg::Send { to_address, amount }) => {
+        SubMsg { msg: CosmosMsg::Bank(BankMsg::Send { to_address, amount }), .. } => {
             assert_eq!(to_address.as_str(), "recipient");
             assert_eq!(amount, &coins(expected_dividend - expected_dividend_tax, ABC_COIN));
         },

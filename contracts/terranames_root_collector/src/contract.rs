@@ -1,5 +1,5 @@
 use cosmwasm_std::{
-    attr, entry_point, from_binary, to_binary, Addr, BankMsg, Coin, CosmosMsg,
+    entry_point, from_binary, to_binary, Addr, BankMsg, Coin, CosmosMsg,
     Decimal, Deps, DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse,
     Response, StdResult, Uint128, WasmMsg,
 };
@@ -66,12 +66,12 @@ fn send_tokens_msg(
                 recipient: recipient.into(),
                 amount,
             })?,
-            send: vec![],
+            funds: vec![],
         }
     ))
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
@@ -96,7 +96,7 @@ pub fn instantiate(
     Ok(Response::default())
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
     env: Env,
@@ -151,17 +151,12 @@ fn execute_deposit(
 
     store_state(deps.storage, &state)?;
 
-    Ok(Response {
-        messages: vec![],
-        attributes: vec![
-            attr("action", "deposit"),
-            attr("amount", deposit),
-            attr("multiplier", state.multiplier),
-            attr("residual", state.residual),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_attribute("action", "deposit")
+        .add_attribute("amount", deposit)
+        .add_attribute("multiplier", state.multiplier.to_string())
+        .add_attribute("residual", state.residual)
+    )
 }
 
 fn execute_withdraw_tokens(
@@ -199,17 +194,13 @@ fn execute_withdraw_tokens(
             &config,
             &to.unwrap_or(info.sender),
             amount,
-        )?
+        )?,
     );
 
-    Ok(Response {
-        messages,
-        attributes: vec![
-            attr("action", "withdraw_tokens"),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("action", "withdraw_tokens")
+    )
 }
 
 fn execute_withdraw_dividends(
@@ -240,20 +231,16 @@ fn execute_withdraw_dividends(
             &config,
             &to.unwrap_or(info.sender.clone()),
             stake_state.dividend,
-        )?
+        )?,
     );
 
     stake_state.dividend = Uint128::zero();
     store_stake_state(deps.storage, &info.sender, &stake_state)?;
 
-    Ok(Response {
-        messages,
-        attributes: vec![
-            attr("action", "withdraw_dividends"),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("action", "withdraw_dividends")
+    )
 }
 
 fn execute_receive(
@@ -302,20 +289,15 @@ fn execute_receive_stake(
     state.total_staked += wrapper.amount;
     store_state(deps.storage, &state)?;
 
-    Ok(Response {
-        messages: vec![],
-        attributes: vec![
-            attr("action", "receive"),
-            attr("receive_type", "stake"),
-            attr("token_amount", stake_state.token_amount),
-            attr("multiplier", stake_state.multiplier),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_attribute("action", "receive")
+        .add_attribute("receive_type", "stake")
+        .add_attribute("token_amount", stake_state.token_amount)
+        .add_attribute("multiplier", stake_state.multiplier.to_string())
+    )
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(
     deps: Deps,
     env: Env,
@@ -375,7 +357,7 @@ fn query_stake_state(
     })
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
     _deps: DepsMut,
     _env: Env,

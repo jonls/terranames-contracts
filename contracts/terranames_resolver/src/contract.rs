@@ -1,5 +1,5 @@
 use cosmwasm_std::{
-    attr, entry_point, to_binary, Deps, DepsMut, Env, MessageInfo,
+    entry_point, to_binary, Deps, DepsMut, Env, MessageInfo,
     QueryResponse, Response, StdResult,
 };
 
@@ -17,7 +17,7 @@ use crate::state::{
 
 type ContractResult<T> = Result<T, ContractError>;
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
@@ -35,7 +35,7 @@ pub fn instantiate(
     Ok(Response::default())
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
     env: Env,
@@ -80,22 +80,18 @@ fn execute_set_value(
 
     store_name_value(deps.storage, &name, value.clone())?;
 
-    Ok(Response {
-        messages: vec![],
-        attributes: vec![
-            attr("action", "set_value"),
-            if let Some(ref value) = value {
-                attr("value", value)
-            } else {
-                attr("value_deleted", "")
-            },
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    let mut response = Response::new()
+        .add_attribute("action", "set_value");
+    response = if let Some(ref value) = value {
+        response.add_attribute("value", value)
+    } else {
+        response.add_attribute("value_deleted", "")
+    };
+
+    Ok(response)
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(
     deps: Deps,
     env: Env,
@@ -141,7 +137,7 @@ fn query_resolve(
     })
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
     _deps: DepsMut,
     _env: Env,

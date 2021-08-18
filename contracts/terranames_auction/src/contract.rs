@@ -1,7 +1,7 @@
 use cosmwasm_std::{
     attr, entry_point, to_binary, Addr, BankMsg, Coin, CosmosMsg, Deps,
-    DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse, StdResult,
-    Response, Uint128, WasmMsg,
+    DepsMut, Env, MessageInfo, QuerierWrapper, QueryResponse, Response,
+    StdResult, Uint128, WasmMsg,
 };
 
 use terranames::auction::{
@@ -76,7 +76,7 @@ fn send_to_collector_msg(
         WasmMsg::Execute {
             contract_addr: config.collector_addr.to_string(),
             msg: to_binary(&RootCollectorExecuteMsg::Deposit {})?,
-            send: vec![
+            funds: vec![
                 deduct_coin_tax(
                     querier,
                     Coin {
@@ -89,7 +89,7 @@ fn send_to_collector_msg(
     ))
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
@@ -117,7 +117,7 @@ pub fn instantiate(
     Ok(Response::default())
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn execute(
     deps: DepsMut,
     env: Env,
@@ -223,11 +223,6 @@ fn execute_bid_existing(
         }.fail();
     }
 
-    // TODO I'm uncertain if these limits are necessary though they may be good
-    // to have as very wide ranges to avoid unpredictable edge cases near the
-    // edges. The lower limit probably needs to be at least
-    // counter_delay_secs to avoid an attack where a name is bid on with a
-    // very short time to expiry then the rate resets after expiry.
     let min_deposit = deposit_from_seconds_ceil(config.min_lease_secs, rate);
     let max_deposit = deposit_from_seconds_floor(config.max_lease_secs, rate);
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
@@ -280,7 +275,7 @@ fn execute_bid_existing(
             &config,
             &info.sender,
             excess_deposit,
-        )?
+        )?,
     );
 
     let mut attributes = vec![
@@ -297,12 +292,10 @@ fn execute_bid_existing(
         );
     }
 
-    Ok(Response {
-        messages,
-        attributes,
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attributes(attributes)
+    )
 }
 
 fn execute_bid_new(
@@ -348,21 +341,17 @@ fn execute_bid_new(
                 &config,
                 &info.sender,
                 msg_deposit,
-            )?
+            )?,
         );
     }
 
-    Ok(Response {
-        messages,
-        attributes: vec![
-            attr("action", "bid"),
-            attr("owner", info.sender),
-            attr("rate", rate),
-            attr("deposit", msg_deposit),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("action", "bid")
+        .add_attribute("owner", info.sender)
+        .add_attribute("rate", rate)
+        .add_attribute("deposit", msg_deposit)
+    )
 }
 
 fn execute_fund(
@@ -404,18 +393,14 @@ fn execute_fund(
             &config,
             &info.sender,
             msg_deposit,
-        )?
+        )?,
     );
 
-    Ok(Response {
-        messages,
-        attributes: vec![
-            attr("action", "fund"),
-            attr("deposit", combined_deposit),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("action", "fund")
+        .add_attribute("deposit", combined_deposit)
+    )
 }
 
 fn execute_set_rate(
@@ -453,16 +438,11 @@ fn execute_set_rate(
     name_state.previous_transition_reference_time = name_state.transition_reference_time;
     store_name_state(deps.storage, &name, &name_state)?;
 
-    Ok(Response {
-        messages: vec![],
-        attributes: vec![
-            attr("action", "set_rate"),
-            attr("rate", rate),
-            attr("deposit", new_deposit),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_attribute("action", "set_rate")
+        .add_attribute("rate", rate)
+        .add_attribute("deposit", new_deposit)
+    )
 }
 
 fn execute_transfer_owner(
@@ -499,15 +479,10 @@ fn execute_transfer_owner(
 
     store_name_state(deps.storage, &name, &name_state)?;
 
-    Ok(Response {
-        messages: vec![],
-        attributes: vec![
-            attr("action", "transfer_owner"),
-            attr("owner", new_owner),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_attribute("action", "transfer_owner")
+        .add_attribute("owner", new_owner)
+    )
 }
 
 fn execute_set_controller(
@@ -529,18 +504,13 @@ fn execute_set_controller(
     name_state.controller = Some(controller.clone());
     store_name_state(deps.storage, &name, &name_state)?;
 
-    Ok(Response {
-        messages: vec![],
-        attributes: vec![
-            attr("action", "set_controller"),
-            attr("controller", controller),
-        ],
-        data: None,
-        submessages: vec![],
-    })
+    Ok(Response::new()
+        .add_attribute("action", "set_controller")
+        .add_attribute("controller", controller)
+    )
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(
     deps: Deps,
     _env: Env,
@@ -641,7 +611,7 @@ fn query_all_name_states(
     })
 }
 
-#[entry_point]
+#[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(
     _deps: DepsMut,
     _env: Env,
