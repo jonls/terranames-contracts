@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use cw20::Cw20ReceiveMsg;
 
+use crate::utils::{Timedelta, Timestamp};
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct InstantiateMsg {
@@ -11,6 +13,8 @@ pub struct InstantiateMsg {
     pub base_token: String,
     /// Stablecoin denomination
     pub stable_denom: String,
+    /// Unstake delay
+    pub unstake_delay: Timedelta,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -28,6 +32,10 @@ pub enum QueryMsg {
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
     Deposit {},
+    UnstakeTokens {
+        /// Amount to unstake
+        amount: Uint128,
+    },
     WithdrawTokens {
         /// Amount to withdraw
         amount: Uint128,
@@ -51,6 +59,8 @@ pub struct ConfigResponse {
     pub base_token: Addr,
     /// Stablecoin denomination
     pub stable_denom: String,
+    /// Unstake delay
+    pub unstake_delay: Timedelta,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -67,8 +77,14 @@ pub struct StateResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct StakeStateResponse {
-    /// Token amount
-    pub token_amount: Uint128,
+    /// Staked amount
+    pub staked_amount: Uint128,
+    /// Unstaking amount
+    pub unstaking_amount: Uint128,
+    /// Unstaked amount
+    pub unstaked_amount: Uint128,
+    /// Unstake time
+    pub unstake_time: Option<Timestamp>,
     /// Initial multiplier
     pub multiplier: Decimal,
     /// Dividend

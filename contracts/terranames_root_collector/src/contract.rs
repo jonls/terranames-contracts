@@ -81,6 +81,7 @@ pub fn instantiate(
     let config = Config {
         base_token: deps.api.addr_validate(&msg.base_token)?,
         stable_denom: msg.stable_denom,
+        unstake_delay: msg.unstake_delay,
     };
 
     store_config(deps.storage, &config)?;
@@ -107,20 +108,15 @@ pub fn execute(
         ExecuteMsg::Deposit {} => {
             execute_deposit(deps, env, info)
         },
+        ExecuteMsg::UnstakeTokens { amount } => {
+            execute_unstake_tokens(deps, env, info, amount)
+        },
         ExecuteMsg::WithdrawTokens { amount, to } => {
-            let to_addr = if let Some(to) = to {
-                Some(deps.api.addr_validate(&to)?)
-            } else {
-                None
-            };
+            let to_addr = to.map(|to| deps.api.addr_validate(&to)).transpose()?;
             execute_withdraw_tokens(deps, env, info, amount, to_addr)
         },
         ExecuteMsg::WithdrawDividends { to } => {
-            let to_addr = if let Some(to) = to {
-                Some(deps.api.addr_validate(&to)?)
-            } else {
-                None
-            };
+            let to_addr = to.map(|to| deps.api.addr_validate(&to)).transpose()?;
             execute_withdraw_dividends(deps, env, info, to_addr)
         },
         ExecuteMsg::Receive(msg) => {
@@ -159,12 +155,11 @@ fn execute_deposit(
     )
 }
 
-fn execute_withdraw_tokens(
+fn execute_unstake_tokens(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     amount: Uint128,
-    to: Option<Addr>,
 ) -> ContractResult<Response> {
     let config = read_config(deps.storage)?;
     let mut state = read_state(deps.storage)?;
@@ -176,18 +171,53 @@ fn execute_withdraw_tokens(
         return InsufficientTokens.fail();
     };
 
-    if stake_state.token_amount < amount {
+    if stake_state.staked_amount < amount {
+        return InsufficientTokens.fail();
+    }
+
+    stake_state.update_dividend(state.multiplier);
+    stake_state.update_unstaked_amount(env.block.time.into(), config.unstake_delay);
+
+    stake_state.staked_amount = stake_state.staked_amount.checked_sub(amount)?;
+    stake_state.unstaking_amount += amount;
+    stake_state.unstaking_begin_time = Some(env.block.time.into());
+    store_stake_state(deps.storage, &info.sender, &stake_state)?;
+
+    state.total_staked = state.total_staked.checked_sub(amount)?;
+    store_state(deps.storage, &state)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "unstake_tokens")
+        .add_attribute("staked_amount", stake_state.staked_amount)
+    )
+}
+
+fn execute_withdraw_tokens(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amount: Uint128,
+    to: Option<Addr>,
+) -> ContractResult<Response> {
+    let config = read_config(deps.storage)?;
+
+    let opt_stake_state = read_option_stake_state(deps.storage, &info.sender)?;
+    let mut stake_state = if let Some(stake_state) = opt_stake_state {
+        stake_state
+    } else {
+        return InsufficientTokens.fail();
+    };
+
+    stake_state.update_unstaked_amount(env.block.time.into(), config.unstake_delay);
+
+    if stake_state.unstaked_amount < amount {
         return InsufficientTokens.fail();
     }
 
     let mut messages = vec![];
 
-    stake_state.update_dividend(state.multiplier);
-    stake_state.token_amount = stake_state.token_amount.checked_sub(amount)?;
+    stake_state.unstaked_amount = stake_state.unstaked_amount.checked_sub(amount)?;
     store_stake_state(deps.storage, &info.sender, &stake_state)?;
-
-    state.total_staked = state.total_staked.checked_sub(amount)?;
-    store_state(deps.storage, &state)?;
 
     messages.push(
         send_tokens_msg(
@@ -200,6 +230,7 @@ fn execute_withdraw_tokens(
     Ok(Response::new()
         .add_messages(messages)
         .add_attribute("action", "withdraw_tokens")
+        .add_attribute("unstaked_amount", stake_state.unstaked_amount)
     )
 }
 
@@ -275,12 +306,15 @@ fn execute_receive_stake(
 
     let stake_state = if let Some(mut stake_state) = opt_stake_state {
         stake_state.update_dividend(state.multiplier);
-        stake_state.token_amount += wrapper.amount;
+        stake_state.staked_amount += wrapper.amount;
         stake_state
     } else {
         StakeState {
             multiplier: state.multiplier,
-            token_amount: wrapper.amount,
+            staked_amount: wrapper.amount,
+            unstaking_amount: Uint128::zero(),
+            unstaked_amount: Uint128::zero(),
+            unstaking_begin_time: None,
             dividend: Uint128::zero(),
         }
     };
@@ -292,7 +326,7 @@ fn execute_receive_stake(
     Ok(Response::new()
         .add_attribute("action", "receive")
         .add_attribute("receive_type", "stake")
-        .add_attribute("token_amount", stake_state.token_amount)
+        .add_attribute("staked_amount", stake_state.staked_amount)
         .add_attribute("multiplier", stake_state.multiplier.to_string())
     )
 }
@@ -328,6 +362,7 @@ fn query_config(
     Ok(ConfigResponse {
         base_token: config.base_token.into(),
         stable_denom: config.stable_denom,
+        unstake_delay: config.unstake_delay,
     })
 }
 
@@ -345,15 +380,27 @@ fn query_state(
 
 fn query_stake_state(
     deps: Deps,
-    _env: Env,
+    env: Env,
     address: Addr,
 ) -> ContractResult<StakeStateResponse> {
+    let config = read_config(deps.storage)?;
     let state = read_state(deps.storage)?;
     let stake_state = read_stake_state(deps.storage, &address)?;
+
+    let (unstaking_amount, unstaked_amount) = stake_state.unstaking_unstaked_amount(
+        env.block.time.into(), config.unstake_delay,
+    );
+    let unstake_time = stake_state.unstaking_begin_time.map(|t| t + config.unstake_delay);
+
+    let dividend = stake_state.dividend(state.multiplier);
+
     Ok(StakeStateResponse {
-        token_amount: stake_state.token_amount,
+        staked_amount: stake_state.staked_amount,
+        unstaking_amount,
+        unstake_time,
+        unstaked_amount,
         multiplier: stake_state.multiplier,
-        dividend: stake_state.dividend(state.multiplier),
+        dividend,
     })
 }
 

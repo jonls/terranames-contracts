@@ -10,6 +10,8 @@ use terranames::root_collector::{
     ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg, ReceiveMsg,
     StakeStateResponse, StateResponse,
 };
+use terranames::testing::helpers::EnvBuilder;
+use terranames::utils::{Timedelta, Timestamp};
 
 use crate::contract::{execute, instantiate, query};
 use crate::errors::ContractError;
@@ -21,6 +23,7 @@ fn default_init() -> InstantiateMsg {
     InstantiateMsg {
         base_token: "token_contract".into(),
         stable_denom: ABC_COIN.into(),
+        unstake_delay: Timedelta::from_seconds(1_814_400), // 3 weeks
     }
 }
 
@@ -41,6 +44,7 @@ fn proper_initialization() {
     let config: ConfigResponse = from_binary(&res).unwrap();
     assert_eq!(config.base_token.as_str(), "token_contract");
     assert_eq!(config.stable_denom, "uabc");
+    assert_eq!(config.unstake_delay.value(), 1_814_400);
 
     let env = mock_env();
     let res = query(deps.as_ref(), env, QueryMsg::State {}).unwrap();
@@ -77,7 +81,10 @@ fn stake_tokens() {
         address: "staker".into(),
     }).unwrap();
     let stake_state: StakeStateResponse = from_binary(&res).unwrap();
-    assert_eq!(stake_state.token_amount.u128(), stake_amount);
+    assert_eq!(stake_state.staked_amount.u128(), stake_amount);
+    assert_eq!(stake_state.unstaking_amount.u128(), 0);
+    assert_eq!(stake_state.unstaked_amount.u128(), 0);
+    assert_eq!(stake_state.unstake_time, None);
     assert_eq!(stake_state.multiplier, Decimal::zero());
     assert_eq!(stake_state.dividend.u128(), 0);
 
@@ -315,78 +322,45 @@ fn withdraw_tokens() {
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::Deposit {}).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    // Staker 1 partial withdrawal
-    let stake_withdrawal_1: u128 = 3_009_852;
-    let env = mock_env();
+    // Staker 1 partial unstake
+    let unstake_1: u128 = 3_009_852;
+    let unstake_1_time = 1_234_567;
+    let env = mock_env().at_time(unstake_1_time);
     let info = mock_info("staker_1", &[]);
-    let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
-        amount: Uint128::from(stake_withdrawal_1),
-        to: None,
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::UnstakeTokens {
+        amount: Uint128::from(unstake_1),
     }).unwrap();
-    assert_eq!(res.messages.len(), 1);
-
-    // Check send token message
-    let send_token_msg = &res.messages[0];
-    match send_token_msg {
-        SubMsg { msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
-            assert_eq!(contract_addr.as_str(), "token_contract");
-            assert_eq!(funds, &[]);
-            let cw20_msg: Cw20ExecuteMsg = from_binary(&msg).unwrap();
-            match cw20_msg {
-                Cw20ExecuteMsg::Transfer { recipient, amount } => {
-                    assert_eq!(recipient.as_str(), "staker_1");
-                    assert_eq!(amount.u128(), stake_withdrawal_1);
-                },
-                _ => panic!("Unexpected contract message: {:?}", cw20_msg),
-            }
-        },
-        _ => panic!("Unexpected message type: {:?}", send_token_msg),
-    }
+    assert_eq!(res.messages.len(), 0);
 
     // Check total staked amount
     let env = mock_env();
     let res = query(deps.as_ref(), env, QueryMsg::State {}).unwrap();
     let state: StateResponse = from_binary(&res).unwrap();
-    assert_eq!(state.total_staked.u128(), stake_1_amount + stake_2_amount - stake_withdrawal_1);
+    assert_eq!(state.total_staked.u128(), stake_1_amount + stake_2_amount - unstake_1);
 
     // Check that staker 1 stake has a calculated dividend and the correct
-    // number of staked tokens.
-    let env = mock_env();
+    // number of staked and unstaking tokens.
+    let env = mock_env().at_time(unstake_1_time + 100);
     let res = query(deps.as_ref(), env, QueryMsg::StakeState {
         address: "staker_1".into(),
     }).unwrap();
     let stake_state: StakeStateResponse = from_binary(&res).unwrap();
-    assert_eq!(stake_state.token_amount.u128(), stake_1_amount - stake_withdrawal_1);
+    assert_eq!(stake_state.staked_amount.u128(), stake_1_amount - unstake_1);
+    assert_eq!(stake_state.unstaking_amount.u128(), unstake_1);
+    assert_eq!(stake_state.unstaked_amount.u128(), 0);
+    assert_eq!(stake_state.unstake_time, Some(Timestamp::from_seconds(unstake_1_time + 1_814_400)));
     assert_eq!(stake_state.multiplier, Decimal::from_str("0.014696156097130519").unwrap());
     assert_eq!(stake_state.dividend.u128(), 134_072);
 
-    // Staker 1 full withdrawal
-    let stake_withdrawal_2: u128 = stake_1_amount - stake_withdrawal_1;
-    let env = mock_env();
+    // Staker 1 full unstake
+    let unstake_2: u128 = stake_1_amount - unstake_1;
+    let unstake_2_time = unstake_1_time + 2_000_000;
+    let env = mock_env().at_time(unstake_2_time);
     let info = mock_info("staker_1", &[]);
-    let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
-        amount: Uint128::from(stake_withdrawal_2),
-        to: None,
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::UnstakeTokens {
+        amount: Uint128::from(unstake_2),
     }).unwrap();
-    assert_eq!(res.messages.len(), 1);
-
-    // Check send token message
-    let send_token_msg = &res.messages[0];
-    match send_token_msg {
-        SubMsg { msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
-            assert_eq!(contract_addr.as_str(), "token_contract");
-            assert_eq!(funds, &[]);
-            let cw20_msg: Cw20ExecuteMsg = from_binary(&msg).unwrap();
-            match cw20_msg {
-                Cw20ExecuteMsg::Transfer { recipient, amount } => {
-                    assert_eq!(recipient.as_str(), "staker_1");
-                    assert_eq!(amount.u128(), stake_withdrawal_2);
-                },
-                _ => panic!("Unexpected contract message: {:?}", cw20_msg),
-            }
-        },
-        _ => panic!("Unexpected message type: {:?}", send_token_msg),
-    }
+    assert_eq!(res.messages.len(), 0);
 
     // Check total staked amount
     let env = mock_env();
@@ -395,15 +369,100 @@ fn withdraw_tokens() {
     assert_eq!(state.total_staked.u128(), stake_2_amount);
 
     // Check that staker 1 stake has a calculated dividend and the correct
-    // number of staked tokens.
-    let env = mock_env();
+    // number of staked and unstaking tokens.
+    let env = mock_env().at_time(unstake_2_time + 1000);
     let res = query(deps.as_ref(), env, QueryMsg::StakeState {
         address: "staker_1".into(),
     }).unwrap();
     let stake_state: StakeStateResponse = from_binary(&res).unwrap();
-    assert_eq!(stake_state.token_amount.u128(), 0);
+    assert_eq!(stake_state.staked_amount.u128(), 0);
+    assert_eq!(stake_state.unstaking_amount.u128(), unstake_2);
+    assert_eq!(stake_state.unstaked_amount.u128(), unstake_1);
+    assert_eq!(stake_state.unstake_time, Some(Timestamp::from_seconds(unstake_2_time + 1_814_400)));
     assert_eq!(stake_state.multiplier, Decimal::from_str("0.014696156097130519").unwrap());
     assert_eq!(stake_state.dividend.u128(), 134_072);
+
+    // Withdraw part of the first unstake
+    let withdraw_1: u128 = 2_560_000;
+    let withdraw_1_time = unstake_2_time + 1_000;
+    let env = mock_env().at_time(withdraw_1_time);
+    let info = mock_info("staker_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
+        amount: Uint128::from(withdraw_1),
+        to: None,
+    }).unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Check send token message
+    let send_token_msg = &res.messages[0];
+    match send_token_msg {
+        SubMsg { msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
+            assert_eq!(contract_addr.as_str(), "token_contract");
+            assert_eq!(funds, &[]);
+            let cw20_msg: Cw20ExecuteMsg = from_binary(&msg).unwrap();
+            match cw20_msg {
+                Cw20ExecuteMsg::Transfer { recipient, amount } => {
+                    assert_eq!(recipient.as_str(), "staker_1");
+                    assert_eq!(amount.u128(), withdraw_1);
+                },
+                _ => panic!("Unexpected contract message: {:?}", cw20_msg),
+            }
+        },
+        _ => panic!("Unexpected message type: {:?}", send_token_msg),
+    }
+
+    // Check that staker 1 stake has a the correct number of staked and
+    // unstaking tokens.
+    let env = mock_env().at_time(withdraw_1_time + 1000);
+    let res = query(deps.as_ref(), env, QueryMsg::StakeState {
+        address: "staker_1".into(),
+    }).unwrap();
+    let stake_state: StakeStateResponse = from_binary(&res).unwrap();
+    assert_eq!(stake_state.staked_amount.u128(), 0);
+    assert_eq!(stake_state.unstaking_amount.u128(), unstake_2);
+    assert_eq!(stake_state.unstaked_amount.u128(), unstake_1 - withdraw_1);
+    assert_eq!(stake_state.unstake_time, Some(Timestamp::from_seconds(unstake_2_time + 1_814_400)));
+
+    // Withdraw some more tokens after unstaking
+    let withdraw_2: u128 = 4_988_123;
+    let withdraw_2_time = unstake_2_time + 2_000_000;
+    let env = mock_env().at_time(withdraw_2_time);
+    let info = mock_info("staker_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
+        amount: Uint128::from(withdraw_2),
+        to: None,
+    }).unwrap();
+    assert_eq!(res.messages.len(), 1);
+
+    // Check send token message
+    let send_token_msg = &res.messages[0];
+    match send_token_msg {
+        SubMsg { msg: CosmosMsg::Wasm(WasmMsg::Execute { contract_addr, msg, funds }), .. } => {
+            assert_eq!(contract_addr.as_str(), "token_contract");
+            assert_eq!(funds, &[]);
+            let cw20_msg: Cw20ExecuteMsg = from_binary(&msg).unwrap();
+            match cw20_msg {
+                Cw20ExecuteMsg::Transfer { recipient, amount } => {
+                    assert_eq!(recipient.as_str(), "staker_1");
+                    assert_eq!(amount.u128(), withdraw_2);
+                },
+                _ => panic!("Unexpected contract message: {:?}", cw20_msg),
+            }
+        },
+        _ => panic!("Unexpected message type: {:?}", send_token_msg),
+    }
+
+    // Check that staker 1 stake has a the correct number of staked and
+    // unstaking tokens.
+    let env = mock_env().at_time(withdraw_2_time + 1000);
+    let res = query(deps.as_ref(), env, QueryMsg::StakeState {
+        address: "staker_1".into(),
+    }).unwrap();
+    let stake_state: StakeStateResponse = from_binary(&res).unwrap();
+    assert_eq!(stake_state.staked_amount.u128(), 0);
+    assert_eq!(stake_state.unstaking_amount.u128(), 0);
+    assert_eq!(stake_state.unstaked_amount.u128(), stake_1_amount - withdraw_1 - withdraw_2);
+    assert_eq!(stake_state.unstake_time, None);
 }
 
 #[test]
@@ -419,7 +478,8 @@ fn withdraw_tokens_to_address() {
 
     // Staker 1 stakes tokens
     let stake_1_amount: u128 = 9_122_993;
-    let env = mock_env();
+    let stake_time = 1_234_567;
+    let env = mock_env().at_time(stake_time);
     let info = mock_info("token_contract", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::Receive(Cw20ReceiveMsg {
         amount: Uint128::from(stake_1_amount),
@@ -429,17 +489,27 @@ fn withdraw_tokens_to_address() {
     assert_eq!(res.messages.len(), 0);
 
     let deposit_amount_1 = 134_010;
-    let env = mock_env();
+    let env = mock_env().at_time(stake_time + 1000);
     let info = mock_info("auction", &coins(deposit_amount_1, ABC_COIN));
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::Deposit {}).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    // Staker partial withdrawal to address
-    let stake_withdrawal_1: u128 = 3_009_852;
-    let env = mock_env();
+    // Staker partial unstake of tokens
+    let unstake_1: u128 = 3_009_852;
+    let unstake_time = stake_time + 2000;
+    let env = mock_env().at_time(unstake_time);
+    let info = mock_info("staker_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::UnstakeTokens {
+        amount: Uint128::from(unstake_1),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Staker withdraws unstaked tokens
+    let withdraw_time = unstake_time + 1_814_400;
+    let env = mock_env().at_time(withdraw_time);
     let info = mock_info("staker_1", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
-        amount: Uint128::from(stake_withdrawal_1),
+        amount: Uint128::from(unstake_1),
         to: Some("recipient".into()),
     }).unwrap();
     assert_eq!(res.messages.len(), 1);
@@ -454,7 +524,7 @@ fn withdraw_tokens_to_address() {
             match cw20_msg {
                 Cw20ExecuteMsg::Transfer { recipient, amount } => {
                     assert_eq!(recipient.as_str(), "recipient");
-                    assert_eq!(amount.u128(), stake_withdrawal_1);
+                    assert_eq!(amount.u128(), unstake_1);
                 },
                 _ => panic!("Unexpected contract message: {:?}", cw20_msg),
             }
@@ -505,11 +575,10 @@ fn withdraw_tokens_then_restake() {
     // Staker 1 withdraws tokens
     let env = mock_env();
     let info = mock_info("staker_1", &[]);
-    let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::UnstakeTokens {
         amount: Uint128::from(stake_1_amount),
-        to: None
     }).unwrap();
-    assert_eq!(res.messages.len(), 1);
+    assert_eq!(res.messages.len(), 0);
 
     // Staker 1 withdraws dividend
     let env = mock_env();
@@ -543,7 +612,7 @@ fn withdraw_tokens_then_restake() {
         address: "staker_1".into(),
     }).unwrap();
     let stake_state: StakeStateResponse = from_binary(&res).unwrap();
-    assert_eq!(stake_state.token_amount.u128(), stake_3_amount);
+    assert_eq!(stake_state.staked_amount.u128(), stake_3_amount);
     assert_eq!(stake_state.dividend.u128(), 0);
 }
 
@@ -626,6 +695,74 @@ fn withdraw_tokens_fails_if_too_few() {
 }
 
 #[test]
+fn withdraw_tokens_fails_if_unstaking() {
+    let mut deps = mock_dependencies(&[]);
+
+    let msg = default_init();
+    let env = mock_env();
+    let info = mock_info("creator", &[]);
+
+    let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Staker 1 stakes tokens
+    let stake_1_amount: u128 = 9_122_993;
+    let stake_1_time = 1_234_567;
+    let env = mock_env().at_time(stake_1_time);
+    let info = mock_info("token_contract", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::Receive(Cw20ReceiveMsg {
+        amount: Uint128::from(stake_1_amount),
+        sender: "staker_1".into(),
+        msg: to_binary(&ReceiveMsg::Stake { }).unwrap(),
+    })).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    let deposit_amount_1 = 134_010;
+    let env = mock_env().at_time(stake_1_time + 1000);
+    let info = mock_info("auction", &coins(deposit_amount_1, ABC_COIN));
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::Deposit {}).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Staker 2 stakes tokens
+    let stake_2_amount: u128 = 3_451_902_999_741;
+    let env = mock_env().at_time(stake_1_time + 2000);
+    let info = mock_info("token_contract", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::Receive(Cw20ReceiveMsg {
+        amount: Uint128::from(stake_2_amount),
+        sender: "staker_2".into(),
+        msg: to_binary(&ReceiveMsg::Stake { }).unwrap(),
+    })).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Staker 1 unstakes tokens
+    let unstake_time = stake_1_time + 100_000;
+    let env = mock_env().at_time(unstake_time);
+    let info = mock_info("staker_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::UnstakeTokens {
+        amount: Uint128::from(stake_1_amount),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Staker 1 tries to withdraw to early
+    let env = mock_env().at_time(unstake_time + 1_814_400 - 1);
+    let info = mock_info("staker_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
+        amount: Uint128::from(stake_1_amount),
+        to: None
+    });
+    assert!(matches!(res, Err(ContractError::InsufficientTokens { .. })));
+
+    // Staker 1 should succeed after the correct delay
+    let env = mock_env().at_time(unstake_time + 1_814_400);
+    let info = mock_info("staker_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
+        amount: Uint128::from(stake_1_amount),
+        to: None
+    }).unwrap();
+    assert_eq!(res.messages.len(), 1);
+}
+
+#[test]
 fn withdraw_tokens_fails_if_already_withdrawn() {
     let mut deps = mock_dependencies(&[]);
 
@@ -664,8 +801,17 @@ fn withdraw_tokens_fails_if_already_withdrawn() {
     })).unwrap();
     assert_eq!(res.messages.len(), 0);
 
-    // Staker 1 withdraws tokens
-    let env = mock_env();
+    // Staker 1 unstakes tokens
+    let unstake_time = 1_234_567;
+    let env = mock_env().at_time(unstake_time);
+    let info = mock_info("staker_1", &[]);
+    let res = execute(deps.as_mut(), env, info, ExecuteMsg::UnstakeTokens {
+        amount: Uint128::from(stake_1_amount),
+    }).unwrap();
+    assert_eq!(res.messages.len(), 0);
+
+    // Staker 1 tries to withdraw tokens
+    let env = mock_env().at_time(unstake_time + 2_000_000);
     let info = mock_info("staker_1", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
         amount: Uint128::from(stake_1_amount),
@@ -674,7 +820,7 @@ fn withdraw_tokens_fails_if_already_withdrawn() {
     assert_eq!(res.messages.len(), 1);
 
     // Staker 1 tries to withdraw more tokens
-    let env = mock_env();
+    let env = mock_env().at_time(unstake_time + 2_000_100);
     let info = mock_info("staker_1", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::WithdrawTokens {
         amount: Uint128::from(stake_1_amount),
@@ -762,7 +908,7 @@ fn withdraw_dividends() {
         address: "staker_1".into(),
     }).unwrap();
     let stake_state: StakeStateResponse = from_binary(&res).unwrap();
-    assert_eq!(stake_state.token_amount.u128(), stake_1_amount);
+    assert_eq!(stake_state.staked_amount.u128(), stake_1_amount);
     assert_eq!(stake_state.multiplier, Decimal::from_str("0.014696156097130519").unwrap());
     assert_eq!(stake_state.dividend.u128(), 0);
 }
