@@ -6,7 +6,10 @@ use cosmwasm_storage::{
     bucket, bucket_read, singleton, singleton_read,
 };
 
-use terranames::auction::{seconds_from_deposit, deposit_from_seconds_floor};
+use terranames::auction::{
+    seconds_from_deposit, deposit_from_seconds_ceil,
+    deposit_from_seconds_floor,
+};
 use terranames::utils::{Timedelta, Timestamp};
 
 pub static CONFIG_KEY: &[u8] = b"config";
@@ -122,6 +125,16 @@ impl NameState {
     /// Return timestamp when ownership expires
     pub fn expire_time(&self) -> Option<Timestamp> {
         self.max_seconds().map(|max_seconds| self.begin_time + max_seconds)
+    }
+
+    /// Return current remaining deposit
+    pub fn current_deposit(&self, current_time: Timestamp) -> Uint128 {
+        let seconds_spent = match self.seconds_spent_since_bid(current_time) {
+            Some(seconds_spent) => seconds_spent,
+            None => return Uint128::zero(),
+        };
+        let deposit_spent = deposit_from_seconds_ceil(seconds_spent, self.rate);
+        self.begin_deposit - deposit_spent
     }
 
     /// Return max allowed deposit for the name

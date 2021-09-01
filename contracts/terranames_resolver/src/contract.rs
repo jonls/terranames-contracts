@@ -2,6 +2,7 @@ use cosmwasm_std::{
     entry_point, to_binary, Deps, DepsMut, Env, MessageInfo,
     QueryResponse, Response, StdResult,
 };
+use snafu::OptionExt;
 
 use terranames::querier::query_name_state;
 use terranames::resolver::{
@@ -131,8 +132,11 @@ fn query_resolve(
     )?;
     let name_value = read_name_value(deps.storage, &name)?;
 
+    let owner = name_state.name_owner.context(NameExpired {})?;
+
     Ok(ResolveNameResponse {
         value: name_value,
+        owner,
         expire_time: name_state.expire_time,
     })
 }

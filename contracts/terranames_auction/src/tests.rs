@@ -81,14 +81,14 @@ impl<'a> Bid<'a> {
 struct NameStateAsserter<'a> {
     name: &'a str,
 
-    owner: Option<&'a str>,
+    name_owner: Option<Option<&'a str>>,
+    bid_owner: Option<Option<&'a str>>,
     controller: Option<Option<&'a str>>,
 
     rate: Option<u128>,
     begin_time: Option<u64>,
     begin_deposit: Option<u128>,
-
-    previous_owner: Option<Option<&'a str>>,
+    current_deposit: Option<u128>,
 
     counter_delay_end: Option<u64>,
     transition_delay_end: Option<u64>,
@@ -101,12 +101,13 @@ impl<'a> NameStateAsserter<'a> {
     fn new(name: &'a str) -> Self {
         Self {
             name,
-            owner: None,
+            name_owner: None,
+            bid_owner: None,
             controller: None,
             rate: None,
             begin_time: None,
             begin_deposit: None,
-            previous_owner: None,
+            current_deposit: None,
             counter_delay_end: None,
             transition_delay_end: None,
             bid_delay_end: None,
@@ -114,10 +115,18 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
-    /// Set owner to assert
-    fn owner(self, owner: &'a str) -> Self {
+    /// Set name owner to assert
+    fn name_owner(self, name_owner: Option<&'a str>) -> Self {
         Self {
-            owner: Some(owner),
+            name_owner: Some(name_owner),
+            ..self
+        }
+    }
+
+    /// Set bid owner to assert
+    fn bid_owner(self, bid_owner: Option<&'a str>) -> Self {
+        Self {
+            bid_owner: Some(bid_owner),
             ..self
         }
     }
@@ -154,10 +163,10 @@ impl<'a> NameStateAsserter<'a> {
         }
     }
 
-    /// Set previous owner to assert
-    fn previous_owner(self, previous_owner: Option<&'a str>) -> Self {
+    /// Set current deposit to assert
+    fn current_deposit(self, current_deposit: u128) -> Self {
         Self {
-            previous_owner: Some(previous_owner),
+            current_deposit: Some(current_deposit),
             ..self
         }
     }
@@ -195,15 +204,18 @@ impl<'a> NameStateAsserter<'a> {
     }
 
     /// Assert name state properties
-    fn assert(self, deps: Deps) {
-        let env = mock_env();
+    fn assert(self, deps: Deps, block_time: u64) {
+        let env = mock_env().at_time(block_time);
         let res = query(deps, env, QueryMsg::GetNameState {
             name: self.name.to_string(),
         }).unwrap();
         let name_state: NameStateResponse = from_binary(&res).unwrap();
 
-        if let Some(owner) = self.owner {
-            assert_eq!(name_state.owner.as_str(), owner, "owner does not match");
+        if let Some(name_owner) = self.name_owner {
+            assert_eq!(name_state.name_owner, name_owner.map(Addr::unchecked), "name_owner does not match");
+        }
+        if let Some(bid_owner) = self.bid_owner {
+            assert_eq!(name_state.bid_owner, bid_owner.map(Addr::unchecked), "bid_owner does not match");
         }
         if let Some(controller) = self.controller {
             assert_eq!(name_state.controller, controller.map(Addr::unchecked), "controller does not match");
@@ -217,8 +229,8 @@ impl<'a> NameStateAsserter<'a> {
         if let Some(begin_deposit) = self.begin_deposit {
             assert_eq!(name_state.begin_deposit.u128(), begin_deposit, "begin_deposit does not match");
         }
-        if let Some(previous_owner) = self.previous_owner {
-            assert_eq!(name_state.previous_owner, previous_owner.map(Addr::unchecked), "previous_owner does not match");
+        if let Some(current_deposit) = self.current_deposit {
+            assert_eq!(name_state.current_deposit.u128(), current_deposit, "current_deposit does not match");
         }
         if let Some(counter_delay_end) = self.counter_delay_end {
             assert_eq!(name_state.counter_delay_end.value(), counter_delay_end, "counter_delay_end does not match");
@@ -278,7 +290,8 @@ fn initial_zero_bid() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("bidder")
+        .name_owner(None)
+        .bid_owner(Some("bidder"))
         .controller(None)
         .rate(0)
         .begin_time(bid_time)
@@ -287,7 +300,7 @@ fn initial_zero_bid() {
         .transition_delay_end(1234)
         .bid_delay_end(1234)
         .expire_time(None)
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_time);
 }
 
 #[test]
@@ -330,7 +343,8 @@ fn initial_non_zero_bid() {
     }
 
     NameStateAsserter::new("example")
-        .owner("bidder")
+        .name_owner(None)
+        .bid_owner(Some("bidder"))
         .controller(None)
         .rate(4_513)
         .begin_time(bid_time)
@@ -339,7 +353,7 @@ fn initial_non_zero_bid() {
         .transition_delay_end(1234)
         .bid_delay_end(1234 + 604800 + 15778476)
         .expire_time(Some(1234 + 23547972))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_time);
 }
 
 #[test]
@@ -405,7 +419,7 @@ fn bid_on_existing_name_as_owner() {
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
-    // Bid on the name as the current owner. Not allowed.
+    // Bid on the name as the currentq owner. Not allowed.
     let bid_2_time: u64 = 2000;
     let deposit_amount = 60_000;
     let res = Bid::on("example", "bidder_1", bid_2_time)
@@ -436,8 +450,8 @@ fn bid_on_existing_zero_rate_name_in_counter_delay() {
     let res = instantiate(deps.as_mut(), env, info, msg).unwrap();
     assert_eq!(0, res.messages.len());
 
-    let bid_1_block: u64 = 1234;
-    let res = Bid::on("example", "bidder_1", bid_1_block)
+    let bid_1_time: u64 = 1234;
+    let res = Bid::on("example", "bidder_1", bid_1_time)
         .execute(deps.as_mut())
         .unwrap();
     assert_eq!(res.messages.len(), 0);
@@ -454,7 +468,8 @@ fn bid_on_existing_zero_rate_name_in_counter_delay() {
     assert_eq!(res.messages.len(), 1);
 
     NameStateAsserter::new("example")
-        .owner("bidder_2")
+        .name_owner(None)
+        .bid_owner(Some("bidder_2"))
         .controller(None)
         .rate(123)
         .begin_time(bid_2_time)
@@ -463,7 +478,7 @@ fn bid_on_existing_zero_rate_name_in_counter_delay() {
         .transition_delay_end(bid_2_time + 604800 + 1814400)
         .bid_delay_end(bid_2_time + 604800 + 15778476)
         .expire_time(Some(bid_2_time + 21073170))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_2_time);
 }
 
 #[test]
@@ -495,7 +510,8 @@ fn bid_on_existing_zero_rate_name_after_counter_delay() {
     assert_eq!(res.messages.len(), 1);
 
     NameStateAsserter::new("example")
-        .owner("bidder_2")
+        .name_owner(Some("bidder_1"))
+        .bid_owner(Some("bidder_2"))
         .controller(None)
         .rate(123)
         .begin_time(bid_2_time)
@@ -504,7 +520,7 @@ fn bid_on_existing_zero_rate_name_after_counter_delay() {
         .transition_delay_end(bid_2_time + 604800 + 1814400)
         .bid_delay_end(bid_2_time + 604800 + 15778476)
         .expire_time(Some(bid_2_time + 21073170))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_2_time);
 }
 
 #[test]
@@ -549,8 +565,8 @@ fn bid_three_bidders() {
     assert_eq!(res.messages.len(), 2);
 
     NameStateAsserter::new("example")
-        .owner("bidder_3")
-        .previous_owner(Some("bidder_1"))
+        .name_owner(Some("bidder_1"))
+        .bid_owner(Some("bidder_3"))
         .rate(125)
         .begin_time(bid_3_time)
         .begin_deposit(30_000)
@@ -558,7 +574,7 @@ fn bid_three_bidders() {
         .transition_delay_end(bid_3_time + 604800 + 1814400)
         .bid_delay_end(bid_3_time + 604800 + 15778476)
         .expire_time(Some(bid_3_time + 20736000))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_3_time);
 }
 
 // Bid by A, starts ownership. Then bid by B, then by C, then counter bid by
@@ -615,7 +631,8 @@ fn bid_is_counter_bid_then_countered() {
     assert_eq!(res.messages.len(), 2);
 
     NameStateAsserter::new("example")
-        .owner("bidder_1")
+        .name_owner(Some("bidder_1"))
+        .bid_owner(Some("bidder_1"))
         .rate(130)
         .begin_time(bid_4_time)
         .begin_deposit(30_000)
@@ -623,7 +640,7 @@ fn bid_is_counter_bid_then_countered() {
         .transition_delay_end(bid_4_time)
         .bid_delay_end(bid_4_time + 604800 + 15778476)
         .expire_time(Some(bid_4_time + 19938461))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_4_time);
 }
 
 // Bid on expired name.
@@ -660,8 +677,8 @@ fn bid_on_expired_name() {
 
     // Transition delay should be based on when the name expired.
     NameStateAsserter::new("example")
-        .owner("bidder_2")
-        .previous_owner(None)
+        .name_owner(None)
+        .bid_owner(Some("bidder_2"))
         .rate(110)
         .begin_time(bid_2_time)
         .begin_deposit(30_000)
@@ -669,7 +686,7 @@ fn bid_on_expired_name() {
         .transition_delay_end(bid_1_time + 21073170 + 604800 + 1814400)
         .bid_delay_end(bid_2_time + 604800 + 15778476)
         .expire_time(Some(bid_2_time + 23563636))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_2_time);
 }
 
 // Bid on name that expired during a transition
@@ -730,8 +747,8 @@ fn bid_on_expired_name_in_transition() {
     // TODO Transition delay could be based on the beginning of the transition
     // before the name expired but is currently based on when it expired.
     NameStateAsserter::new("example")
-        .owner("bidder_3")
-        .previous_owner(None)
+        .name_owner(None)
+        .bid_owner(Some("bidder_3"))
         .rate(125)
         .begin_time(bid_3_time)
         .begin_deposit(30_000)
@@ -739,7 +756,7 @@ fn bid_on_expired_name_in_transition() {
         .transition_delay_end(bid_3_time + 604_800 + 1_814_400)
         .bid_delay_end(bid_3_time + 604_800 + 50000)
         .expire_time(Some(bid_3_time + 20736000))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_3_time);
 }
 
 // TODO More bidding test cases needed here
@@ -839,7 +856,8 @@ fn fund_name() {
     }
 
     NameStateAsserter::new("example")
-        .owner("bidder")
+        .name_owner(Some("bidder"))
+        .bid_owner(Some("bidder"))
         .rate(123)
         .begin_time(bid_time)
         .begin_deposit(60_000)
@@ -847,7 +865,7 @@ fn fund_name() {
         .transition_delay_end(1234)
         .bid_delay_end(1234 + 604_800 + 15_778_476)
         .expire_time(Some(1234 + 42146341))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), fund_time);
 }
 
 #[test]
@@ -999,8 +1017,8 @@ fn set_lower_rate() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("bidder")
-        .previous_owner(Some("bidder"))
+        .name_owner(Some("bidder"))
+        .bid_owner(Some("bidder"))
         .rate(98)
         .begin_time(rate_change_time)
         .begin_deposit(28578)
@@ -1008,7 +1026,7 @@ fn set_lower_rate() {
         .transition_delay_end(rate_change_time)
         .bid_delay_end(rate_change_time + 604_800 + 15_778_476)
         .expire_time(Some(rate_change_time + 25_195_297))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), rate_change_time);
 }
 
 #[test]
@@ -1042,8 +1060,8 @@ fn set_higher_rate() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("bidder")
-        .previous_owner(Some("bidder"))
+        .name_owner(Some("bidder"))
+        .bid_owner(Some("bidder"))
         .rate(140)
         .begin_time(rate_change_time)
         .begin_deposit(28578)
@@ -1051,7 +1069,7 @@ fn set_higher_rate() {
         .transition_delay_end(rate_change_time)
         .bid_delay_end(rate_change_time + 604_800 + 15_778_476)
         .expire_time(Some(rate_change_time + 17_636_708))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), rate_change_time);
 }
 
 #[test]
@@ -1266,8 +1284,8 @@ fn set_rate_allows_bidding_do_transition() {
     assert_eq!(res.messages.len(), 2);
 
     NameStateAsserter::new("example")
-        .owner("bidder_2")
-        .previous_owner(Some("bidder_1"))
+        .name_owner(Some("bidder_1"))
+        .bid_owner(Some("bidder_2"))
         .rate(121)
         .begin_time(bid_2_time)
         .begin_deposit(30_000)
@@ -1275,7 +1293,7 @@ fn set_rate_allows_bidding_do_transition() {
         .transition_delay_end(bid_2_time + 604_800 + 1_814_400)
         .bid_delay_end(bid_2_time + 604_800 + 15_778_476)
         .expire_time(Some(bid_2_time + 21421487))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_2_time);
 }
 
 // Rate change by A. This should trigger a counter delay of allowed bidding
@@ -1331,8 +1349,8 @@ fn set_rate_allows_bidding_no_transition() {
     assert_eq!(res.messages.len(), 2);
 
     NameStateAsserter::new("example")
-        .owner("bidder_1")
-        .previous_owner(Some("bidder_1"))
+        .name_owner(Some("bidder_1"))
+        .bid_owner(Some("bidder_1"))
         .rate(122)
         .begin_time(bid_3_time)
         .begin_deposit(30_000)
@@ -1340,7 +1358,7 @@ fn set_rate_allows_bidding_no_transition() {
         .transition_delay_end(bid_3_time)
         .bid_delay_end(bid_3_time + 604_800 + 15_778_476)
         .expire_time(Some(bid_3_time + 21245901))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_3_time);
 }
 
 // Rate change by A. This should trigger a counter delay of allowed bidding
@@ -1416,8 +1434,8 @@ fn set_rate_allows_bidding_continued_transition() {
     assert_eq!(res.messages.len(), 2);
 
     NameStateAsserter::new("example")
-        .owner("bidder_2")
-        .previous_owner(Some("bidder_2"))
+        .name_owner(Some("bidder_2"))
+        .bid_owner(Some("bidder_2"))
         .rate(122)
         .begin_time(bid_4_time)
         .begin_deposit(30_000)
@@ -1425,7 +1443,7 @@ fn set_rate_allows_bidding_continued_transition() {
         .transition_delay_end(bid_2_time + 604_800 + 1_814_400)
         .bid_delay_end(bid_4_time + 604_800 + 15_778_476)
         .expire_time(Some(bid_4_time + 21245901))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), bid_4_time);
 }
 
 #[test]
@@ -1459,14 +1477,15 @@ fn transfer_owner() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("receiver")
+        .name_owner(Some("receiver"))
+        .bid_owner(Some("receiver"))
         .begin_time(bid_time)
         .begin_deposit(deposit_amount)
         .counter_delay_end(bid_time + 604_800)
         .transition_delay_end(bid_time)
         .bid_delay_end(bid_time + 604_800 + 15_778_476)
         .expire_time(Some(bid_time + 21073170))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), transfer_time);
 }
 
 #[test]
@@ -1510,14 +1529,15 @@ fn transfer_owner_during_counter_bid() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("bidder_2")
+        .name_owner(Some("receiver_1"))
+        .bid_owner(Some("bidder_2"))
         .begin_time(bid_2_time)
         .begin_deposit(deposit_amount)
         .counter_delay_end(bid_2_time + 604_800)
         .transition_delay_end(bid_2_time + 604_800 + 1_814_400)
         .bid_delay_end(bid_2_time + 604_800 + 15_778_476)
         .expire_time(Some(bid_2_time + 20903225))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), transfer_time);
 
     // Highest bid owner can also transfer their ownership of the bid and
     // potential future ownership of the name.
@@ -1530,11 +1550,11 @@ fn transfer_owner_during_counter_bid() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("receiver_2")
+        .name_owner(Some("receiver_1"))
+        .bid_owner(Some("receiver_2"))
         .begin_time(bid_2_time)
         .begin_deposit(deposit_amount)
-        .previous_owner(Some("receiver_1"))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), transfer_time);
 }
 
 #[test]
@@ -1609,9 +1629,10 @@ fn set_controller_new_bid() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("bidder")
+        .name_owner(Some("bidder"))
+        .bid_owner(Some("bidder"))
         .controller(Some("controller"))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), set_controller_time);
 }
 
 #[test]
@@ -1645,8 +1666,8 @@ fn set_controller_during_counter_delay() {
     assert_eq!(res.messages.len(), 2);
 
     // Original owner can set controller
-    let transfer_time = bid_2_time + 100;
-    let env = mock_env().at_time(transfer_time);
+    let set_controller_time = bid_2_time + 100;
+    let env = mock_env().at_time(set_controller_time);
     let info = mock_info("bidder_1", &[]);
     let res = execute(deps.as_mut(), env, info, ExecuteMsg::SetNameController {
         name: "example".into(),
@@ -1655,9 +1676,10 @@ fn set_controller_during_counter_delay() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("bidder_2")
+        .name_owner(Some("bidder_1"))
+        .bid_owner(Some("bidder_2"))
         .controller(Some("controller_1"))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), set_controller_time);
 
     // Highest bid owner cannot set controller before end of counter delay
     let set_controller_time = bid_2_time + 100;
@@ -1680,9 +1702,10 @@ fn set_controller_during_counter_delay() {
     assert_eq!(res.messages.len(), 0);
 
     NameStateAsserter::new("example")
-        .owner("bidder_2")
+        .name_owner(Some("bidder_2"))
+        .bid_owner(Some("bidder_2"))
         .controller(Some("controller_2"))
-        .assert(deps.as_ref());
+        .assert(deps.as_ref(), set_controller_time);
 }
 
 #[test]
@@ -1726,7 +1749,7 @@ fn query_all_name_states() {
         .unwrap();
     assert_eq!(res.messages.len(), 1);
 
-    let env = mock_env();
+    let env = mock_env().at_time(bid_3_time);
     let res = query(deps.as_ref(), env, QueryMsg::GetAllNameStates {
         start_after: None,
         limit: Some(2),
@@ -1740,7 +1763,7 @@ fn query_all_name_states() {
     assert_eq!(state.names[1].state.rate.u128(), 30);
 
     // Query for second page
-    let env = mock_env();
+    let env = mock_env().at_time(bid_3_time);
     let res = query(deps.as_ref(), env, QueryMsg::GetAllNameStates {
         start_after: Some("example".into()),
         limit: Some(2),

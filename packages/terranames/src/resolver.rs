@@ -44,6 +44,8 @@ pub struct ConfigResponse {
 pub struct ResolveNameResponse {
     /// Value that the name resolved to
     pub value: Option<String>,
+    /// Current owner (for verifying if owner has changed)
+    pub owner: Addr,
     /// Timestamp when value expires
     pub expire_time: Option<Timestamp>,
 }

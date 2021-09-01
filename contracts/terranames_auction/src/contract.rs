@@ -217,12 +217,17 @@ fn execute_bid_existing(
     let deposit_spent = deposit_from_seconds_ceil(seconds_spent_since_bid, name_state.rate);
     let deposit_left = name_state.begin_deposit.saturating_sub(deposit_spent);
 
+    // TODO Consider adding a small delta that could be given back to the previous
+    // bidder to cover tx fees.
     if msg_deposit <= deposit_left {
         return BidDepositTooLow {
             deposit: deposit_left,
         }.fail();
     }
 
+    // TODO Consider allowing the existing owner a slightly higher max deposit
+    // at the same rate. The increase in deposit could be equal to the rate
+    // increase times the length of the previous lease plus a small penalty.
     let min_deposit = deposit_from_seconds_ceil(config.min_lease_secs, rate);
     let max_deposit = deposit_from_seconds_floor(config.max_lease_secs, rate);
     if msg_deposit < min_deposit || msg_deposit > max_deposit {
@@ -513,7 +518,7 @@ fn execute_set_controller(
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(
     deps: Deps,
-    _env: Env,
+    env: Env,
     msg: QueryMsg,
 ) -> ContractResult<QueryResponse> {
     match msg {
@@ -521,10 +526,10 @@ pub fn query(
             Ok(to_binary(&query_config(deps)?)?)
         },
         QueryMsg::GetNameState { name } => {
-            Ok(to_binary(&query_name_state(deps, name)?)?)
+            Ok(to_binary(&query_name_state(deps, env, name)?)?)
         },
         QueryMsg::GetAllNameStates { start_after, limit } => {
-            Ok(to_binary(&query_all_name_states(deps, start_after, limit)?)?)
+            Ok(to_binary(&query_all_name_states(deps, env, start_after, limit)?)?)
         },
     }
 }
@@ -545,34 +550,57 @@ fn query_config(
     })
 }
 
+fn create_name_state_response(
+    config: &Config,
+    current_time: Timestamp,
+    name_state: &NameState,
+) -> NameStateResponse {
+    let counter_delay_end = name_state.counter_delay_end(config);
+    let transition_delay_end = name_state.transition_delay_end(config);
+    let bid_delay_end = name_state.bid_delay_end(config);
+    let expire_time = name_state.expire_time();
+
+    let owner_status = name_state.owner_status(&config, current_time);
+    let current_deposit = name_state.current_deposit(current_time);
+
+    let (name_owner, bid_owner) = match owner_status {
+        OwnerStatus::Expired { .. } =>
+            (None, None),
+        OwnerStatus::CounterDelay { name_owner, bid_owner, .. } =>
+            (name_owner, Some(bid_owner)),
+        OwnerStatus::Valid { owner, .. } | OwnerStatus::TransitionDelay { owner, ..} =>
+            (Some(owner.clone()), Some(owner)),
+    };
+
+    NameStateResponse {
+        name_owner,
+        bid_owner,
+        controller: name_state.controller.clone(),
+        rate: name_state.rate,
+        begin_time: name_state.begin_time,
+        begin_deposit: name_state.begin_deposit,
+        current_deposit,
+        counter_delay_end,
+        transition_delay_end,
+        bid_delay_end,
+        expire_time,
+    }
+}
+
 fn query_name_state(
     deps: Deps,
+    env: Env,
     name: String,
 ) -> ContractResult<NameStateResponse> {
     let config = read_config(deps.storage)?;
     let name_state = read_name_state(deps.storage, &name)?;
 
-    let counter_delay_end = name_state.counter_delay_end(&config);
-    let transition_delay_end = name_state.transition_delay_end(&config);
-    let bid_delay_end = name_state.bid_delay_end(&config);
-    let expire_time = name_state.expire_time();
-
-    Ok(NameStateResponse {
-        owner: name_state.owner,
-        controller: name_state.controller,
-        rate: name_state.rate,
-        begin_time: name_state.begin_time,
-        begin_deposit: name_state.begin_deposit,
-        previous_owner: name_state.previous_owner,
-        counter_delay_end,
-        transition_delay_end,
-        bid_delay_end,
-        expire_time,
-    })
+    Ok(create_name_state_response(&config, env.block.time.into(), &name_state))
 }
 
 fn query_all_name_states(
     deps: Deps,
+    env: Env,
     start_after: Option<String>,
     limit: Option<u32>,
 ) -> ContractResult<AllNameStatesResponse> {
@@ -583,31 +611,19 @@ fn query_all_name_states(
         limit,
     )?;
 
-    let names: StdResult<Vec<NameStateItem>> = name_states.into_iter().map(|(name, name_state)| {
-        let counter_delay_end = name_state.counter_delay_end(&config);
-        let transition_delay_end = name_state.transition_delay_end(&config);
-        let bid_delay_end = name_state.bid_delay_end(&config);
-        let expire_time = name_state.expire_time();
+    let names: Vec<NameStateItem> = name_states.into_iter().map(|(name, name_state)| {
+        let state = create_name_state_response(
+            &config, env.block.time.into(), &name_state,
+        );
 
         Ok(NameStateItem {
             name,
-            state: NameStateResponse {
-                owner: name_state.owner,
-                controller: name_state.controller,
-                rate: name_state.rate,
-                begin_time: name_state.begin_time,
-                begin_deposit: name_state.begin_deposit,
-                previous_owner: name_state.previous_owner,
-                counter_delay_end,
-                transition_delay_end,
-                bid_delay_end,
-                expire_time,
-           }
+            state,
         })
-    }).collect();
+    }).collect::<StdResult<Vec<_>>>()?;
 
     Ok(AllNameStatesResponse {
-        names: names?,
+        names,
     })
 }
 

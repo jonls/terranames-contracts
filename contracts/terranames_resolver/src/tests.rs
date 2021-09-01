@@ -48,13 +48,14 @@ fn set_value_to_string() {
     assert_eq!(res.messages.len(), 0);
 
     deps.querier.auction_querier.response = Some(NameStateResponse {
-        owner: Addr::unchecked("owner"),
+        name_owner: Some(Addr::unchecked("owner")),
+        bid_owner: Some(Addr::unchecked("owner")),
         controller: Some(Addr::unchecked("controller")),
+
         rate: Uint128::from(100u64),
         begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::from(1000u64),
-
-        previous_owner: None,
+        current_deposit: Uint128::from(965u64),
 
         counter_delay_end: Timestamp::from_seconds(110000),
         transition_delay_end: Timestamp::from_seconds(130000),
@@ -91,13 +92,14 @@ fn set_value_to_none() {
     assert_eq!(res.messages.len(), 0);
 
     deps.querier.auction_querier.response = Some(NameStateResponse {
-        owner: Addr::unchecked("owner"),
+        bid_owner: Some(Addr::unchecked("owner")),
+        name_owner: Some(Addr::unchecked("owner")),
         controller: Some(Addr::unchecked("controller")),
+
         rate: Uint128::from(100u64),
         begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::from(1000u64),
-
-        previous_owner: None,
+        current_deposit: Uint128::from(965u64),
 
         counter_delay_end: Timestamp::from_seconds(110000),
         transition_delay_end: Timestamp::from_seconds(130000),
@@ -134,13 +136,14 @@ fn set_value_for_zero_bid() {
     assert_eq!(res.messages.len(), 0);
 
     deps.querier.auction_querier.response = Some(NameStateResponse {
-        owner: Addr::unchecked("owner"),
+        bid_owner: Some(Addr::unchecked("owner")),
+        name_owner: Some(Addr::unchecked("owner")),
         controller: Some(Addr::unchecked("controller")),
+
         rate: Uint128::zero(),
         begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::zero(),
-
-        previous_owner: None,
+        current_deposit: Uint128::zero(),
 
         counter_delay_end: Timestamp::from_seconds(110000),
         transition_delay_end: Timestamp::from_seconds(130000),
@@ -177,13 +180,14 @@ fn set_value_as_other_fails() {
     assert_eq!(res.messages.len(), 0);
 
     deps.querier.auction_querier.response = Some(NameStateResponse {
-        owner: Addr::unchecked("owner"),
+        bid_owner: Some(Addr::unchecked("owner")),
+        name_owner: Some(Addr::unchecked("owner")),
         controller: Some(Addr::unchecked("controller")),
+
         rate: Uint128::zero(),
         begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::zero(),
-
-        previous_owner: None,
+        current_deposit: Uint128::zero(),
 
         counter_delay_end: Timestamp::from_seconds(110000),
         transition_delay_end: Timestamp::from_seconds(130000),
@@ -222,13 +226,14 @@ fn set_value_when_controller_is_none_fails() {
     assert_eq!(res.messages.len(), 0);
 
     deps.querier.auction_querier.response = Some(NameStateResponse {
-        owner: Addr::unchecked("owner"),
+        bid_owner: Some(Addr::unchecked("owner")),
+        name_owner: Some(Addr::unchecked("owner")),
         controller: None,
+
         rate: Uint128::zero(),
         begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::zero(),
-
-        previous_owner: None,
+        current_deposit: Uint128::zero(),
 
         counter_delay_end: Timestamp::from_seconds(110_000),
         transition_delay_end: Timestamp::from_seconds(130_000),
@@ -258,13 +263,14 @@ fn set_value_when_expired_fails() {
     assert_eq!(res.messages.len(), 0);
 
     deps.querier.auction_querier.response = Some(NameStateResponse {
-        owner: Addr::unchecked("owner"),
+        bid_owner: Some(Addr::unchecked("owner")),
+        name_owner: Some(Addr::unchecked("owner")),
         controller: Some(Addr::unchecked("controller")),
+
         rate: Uint128::from(100u64),
         begin_time: Timestamp::from_seconds(100_000),
         begin_deposit: Uint128::from(1000u64),
-
-        previous_owner: None,
+        current_deposit: Uint128::from(965u64),
 
         counter_delay_end: Timestamp::from_seconds(110_000),
         transition_delay_end: Timestamp::from_seconds(130_000),

@@ -100,7 +100,9 @@ pub struct ConfigResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct NameStateResponse {
     /// Owner of the name
-    pub owner: Addr,
+    pub name_owner: Option<Addr>,
+    /// Owner of the current highest bid
+    pub bid_owner: Option<Addr>,
     /// Controller of the name
     pub controller: Option<Addr>,
 
@@ -110,9 +112,8 @@ pub struct NameStateResponse {
     pub begin_time: Timestamp,
     /// Deposit when lease begun
     pub begin_deposit: Uint128,
-
-    /// Previous owner
-    pub previous_owner: Option<Addr>,
+    /// Deposit now
+    pub current_deposit: Uint128,
 
     /// Counter-delay end timestamp
     pub counter_delay_end: Timestamp,
